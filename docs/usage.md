@@ -17,6 +17,13 @@
 - The picker component will enumerate windows; choose a target to attach the overlay.
 - Configuration updates persist between runs via the `config` module.
 
+## Interaction
+- The overlay ignores mouse clicks by default so you can interact with whatever is underneath.
+- Hold **Shift** while clicking the overlay to route hit tests to it; if the mirrored source is
+  minimized, the Shift+Click will restore it and bring it to the foreground.
+- A future flag may enable forwarding Shift+Click events to the source window, but it remains
+  disabled by default.
+
 ## Notes
 - Use `nimpretty --indent:2 --maxLineLen:100 <path>` before submitting changes.
 - Exported procs/types should have `##` doc comments to keep API documentation accurate.
