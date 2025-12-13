@@ -15,6 +15,28 @@ when not declared(DestroyMenu):
 when not declared(SetWindowLongPtrW):
   proc SetWindowLongPtrW(hWnd: HWND; nIndex: int32; dwNewLong: LONG_PTR): LONG_PTR
       {.stdcall, dynlib: "user32", importc.}
+when not declared(GetClientRect):
+  proc GetClientRect(hWnd: HWND; lpRect: ptr RECT): WINBOOL {.stdcall,
+      dynlib: "user32", importc.}
+when not declared(DwmRegisterThumbnail):
+  proc DwmRegisterThumbnail(hwndDestination: HWND; hwndSource: HWND;
+      phThumbnailId: ptr HANDLE): HRESULT {.stdcall, dynlib: "dwmapi", importc.}
+when not declared(DwmUnregisterThumbnail):
+  proc DwmUnregisterThumbnail(hThumbnailId: HANDLE): HRESULT {.stdcall,
+      dynlib: "dwmapi", importc.}
+when not declared(DwmUpdateThumbnailProperties):
+  proc DwmUpdateThumbnailProperties(hThumbnailId: HANDLE;
+      ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT {.stdcall,
+      dynlib: "dwmapi", importc.}
+
+type
+  DWM_THUMBNAIL_PROPERTIES {.pure.} = object
+    dwFlags: DWORD
+    rcDestination: RECT
+    rcSource: RECT
+    opacity: BYTE
+    fVisible: WINBOOL
+    fSourceClientAreaOnly: WINBOOL
 
 import config/storage
 
@@ -30,14 +52,25 @@ const
 
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
+  DWM_TNP_RECTDESTINATION = 0x1
+  DWM_TNP_RECTSOURCE = 0x2
+  DWM_TNP_OPACITY = 0x4
+  DWM_TNP_VISIBLE = 0x8
+  DWM_TNP_SOURCECLIENTAREAONLY = 0x10
 
 type
   AppState = object
     cfg: OverlayConfig
     hInstance: HINSTANCE
     hwnd: HWND
+    targetHwnd: HWND
+    thumbnail: HANDLE
+    cropRect: RECT
+    hasCrop: bool
+    opacity: BYTE
+    thumbnailVisible: bool
 
-var appState: AppState
+var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
@@ -94,6 +127,66 @@ proc handleMove(lParam: LPARAM) =
   appState.cfg.x = int(int16(loWordL(lParam)))
   appState.cfg.y = int(int16(hiWordL(lParam)))
 
+proc clientRect(hwnd: HWND): RECT =
+  var rect: RECT
+  if GetClientRect(hwnd, addr rect) != 0:
+    rect
+
+proc unregisterThumbnail() =
+  if appState.thumbnail != 0:
+    discard DwmUnregisterThumbnail(appState.thumbnail)
+    appState.thumbnail = 0
+
+proc updateThumbnailProperties() =
+  if appState.thumbnail == 0:
+    return
+  let destRect = clientRect(appState.hwnd)
+  var props: DWM_THUMBNAIL_PROPERTIES
+  props.dwFlags = DWM_TNP_VISIBLE or DWM_TNP_OPACITY or DWM_TNP_RECTDESTINATION or
+      DWM_TNP_RECTSOURCE or DWM_TNP_SOURCECLIENTAREAONLY
+  props.rcDestination = destRect
+  props.rcSource = appState.cropRect
+  props.opacity = appState.opacity
+  props.fVisible = (if appState.thumbnailVisible: 1 else: 0)
+  props.fSourceClientAreaOnly = 1
+  discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
+
+proc setDefaultCrop(target: HWND) =
+  appState.cropRect = clientRect(target)
+  appState.hasCrop = true
+
+proc registerThumbnail(target: HWND) =
+  unregisterThumbnail()
+  appState.targetHwnd = 0
+  if target == 0:
+    return
+
+  var thumbnailId: HANDLE
+  if DwmRegisterThumbnail(appState.hwnd, target, addr thumbnailId) == 0:
+    appState.thumbnail = thumbnailId
+    appState.targetHwnd = target
+    if not appState.hasCrop:
+      setDefaultCrop(target)
+    updateThumbnailProperties()
+
+proc setTargetWindow*(target: HWND) =
+  if target != appState.targetHwnd:
+    appState.hasCrop = false
+    registerThumbnail(target)
+
+proc setCrop*(rect: RECT) =
+  appState.cropRect = rect
+  appState.hasCrop = true
+  updateThumbnailProperties()
+
+proc setOpacity*(value: BYTE) =
+  appState.opacity = value
+  updateThumbnailProperties()
+
+proc setThumbnailVisible*(visible: bool) =
+  appState.thumbnailVisible = visible
+  updateThumbnailProperties()
+
 proc handleDpiChanged(hwnd: HWND, lParam: LPARAM) =
   let suggested = cast[ptr RECT](lParam)
   let width = suggested.right - suggested.left
@@ -143,6 +236,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   case msg
   of WM_SIZE:
     handleSize(lParam)
+    updateThumbnailProperties()
     return 0
   of WM_MOVE:
     handleMove(lParam)
@@ -157,6 +251,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     handleContextMenu(hwnd, lParam)
     return 0
   of WM_DESTROY:
+    unregisterThumbnail()
     saveStateOnClose()
     PostQuitMessage(0)
     return 0
