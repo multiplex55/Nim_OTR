@@ -1,6 +1,6 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
 when defined(windows):
-  {.appType: "gui".}
+  {.appType: gui.}
 
 import std/[os, strutils, widestrs]
 import winim/lean
@@ -96,6 +96,12 @@ when not declared(EnumWindows):
       stdcall, dynlib: "user32", importc.}
 
 import ../config/storage
+
+## Forward declarations for routines used before their definitions.
+proc updateThumbnailProperties()
+proc registerThumbnail(target: HWND)
+proc startValidationTimer()
+proc stopValidationTimer()
 
 const
   className = L"NimOTROverlayClass"
@@ -616,8 +622,8 @@ proc createWindow(hInstance: HINSTANCE): HWND =
     return 0
 
   let useDefault = not hasValidPosition(appState.cfg)
-  let xpos = if useDefault: CW_USEDEFAULT else: appState.cfg.x
-  let ypos = if useDefault: CW_USEDEFAULT else: appState.cfg.y
+  let xpos = if useDefault: CW_USEDEFAULT else: int32(appState.cfg.x)
+  let ypos = if useDefault: CW_USEDEFAULT else: int32(appState.cfg.y)
 
   result = CreateWindowExW(
     0,
@@ -626,8 +632,8 @@ proc createWindow(hInstance: HINSTANCE): HWND =
     currentStyle(),
     xpos,
     ypos,
-    appState.cfg.width,
-    appState.cfg.height,
+    int32(appState.cfg.width),
+    int32(appState.cfg.height),
     0,
     0,
     hInstance,
