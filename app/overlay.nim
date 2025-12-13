@@ -1,10 +1,10 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
 when defined(windows):
-  {.appType: gui.}
+  {.appType: "gui".}
 
 import std/[os, strutils, widestrs]
-import winlean
-import util/geometry
+import winim/lean
+import ../util/geometry
 
 when not declared(CreatePopupMenu):
   proc CreatePopupMenu(): HMENU {.stdcall, dynlib: "user32", importc.}
@@ -94,7 +94,7 @@ type
     fVisible: WINBOOL
     fSourceClientAreaOnly: WINBOOL
 
-import config/storage
+import ../config/storage
 
 const
   className = wideCString"NimOTROverlayClass"
