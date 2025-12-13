@@ -28,6 +28,13 @@ when not declared(DwmUpdateThumbnailProperties):
   proc DwmUpdateThumbnailProperties(hThumbnailId: HANDLE;
       ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT {.stdcall,
       dynlib: "dwmapi", importc.}
+when not declared(GetAsyncKeyState):
+  proc GetAsyncKeyState(vKey: int32): int16 {.stdcall, dynlib: "user32", importc.}
+when not declared(IsIconic):
+  proc IsIconic(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32", importc.}
+when not declared(SetForegroundWindow):
+  proc SetForegroundWindow(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32",
+      importc.}
 
 type
   DWM_THUMBNAIL_PROPERTIES {.pure.} = object
@@ -57,6 +64,10 @@ const
   DWM_TNP_OPACITY = 0x4
   DWM_TNP_VISIBLE = 0x8
   DWM_TNP_SOURCECLIENTAREAONLY = 0x10
+  VK_SHIFT = 0x10
+  HTTRANSPARENT = -1
+  SW_RESTORE = 9
+  enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
 type
   AppState = object
@@ -100,6 +111,20 @@ proc configCropRect(cfg: OverlayConfig): RECT =
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
+
+proc shiftHeld(): bool =
+  (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
+
+proc restoreAndFocusTarget() =
+  let target = appState.targetHwnd
+  if target == 0:
+    return
+  if IsIconic(target) != 0:
+    discard ShowWindow(target, SW_RESTORE)
+  discard SetForegroundWindow(target)
+  when enableClickForwarding:
+    ## Future: forward the click to the source window when enabled.
+    discard
 
 proc createContextMenu(): HMENU =
   result = CreatePopupMenu()
@@ -329,6 +354,13 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_CONTEXTMENU:
     handleContextMenu(hwnd, lParam)
     return 0
+  of WM_NCHITTEST:
+    if not shiftHeld():
+      return HTTRANSPARENT
+  of WM_LBUTTONDOWN:
+    if shiftHeld():
+      restoreAndFocusTarget()
+    return DefWindowProcW(hwnd, msg, wParam, lParam)
   of WM_DESTROY:
     unregisterThumbnail()
     saveStateOnClose()
