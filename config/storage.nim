@@ -12,6 +12,11 @@ type
     height*: int
     topMost*: bool
     borderless*: bool
+    cropActive*: bool
+    cropLeft*: int
+    cropTop*: int
+    cropWidth*: int
+    cropHeight*: int
 
 proc defaultOverlayConfig*(): OverlayConfig =
   OverlayConfig(
@@ -20,7 +25,12 @@ proc defaultOverlayConfig*(): OverlayConfig =
     width: 960,
     height: 540,
     topMost: false,
-    borderless: false
+    borderless: false,
+    cropActive: false,
+    cropLeft: 0,
+    cropTop: 0,
+    cropWidth: 0,
+    cropHeight: 0
   )
 
 proc configPath*(): string =
@@ -41,6 +51,11 @@ proc loadOverlayConfig*(): OverlayConfig =
       result.height = data.getOrDefault("height", result.height).getInt()
       result.topMost = data.getOrDefault("topMost", result.topMost).getBool()
       result.borderless = data.getOrDefault("borderless", result.borderless).getBool()
+      result.cropActive = data.getOrDefault("cropActive", result.cropActive).getBool()
+      result.cropLeft = data.getOrDefault("cropLeft", result.cropLeft).getInt()
+      result.cropTop = data.getOrDefault("cropTop", result.cropTop).getInt()
+      result.cropWidth = data.getOrDefault("cropWidth", result.cropWidth).getInt()
+      result.cropHeight = data.getOrDefault("cropHeight", result.cropHeight).getInt()
       return
     except CatchableError:
       discard
@@ -53,7 +68,12 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "width": cfg.width,
     "height": cfg.height,
     "topMost": cfg.topMost,
-    "borderless": cfg.borderless
+    "borderless": cfg.borderless,
+    "cropActive": cfg.cropActive,
+    "cropLeft": cfg.cropLeft,
+    "cropTop": cfg.cropTop,
+    "cropWidth": cfg.cropWidth,
+    "cropHeight": cfg.cropHeight
   }
   writeFile(configPath(), node.pretty())
 
