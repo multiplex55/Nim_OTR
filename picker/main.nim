@@ -163,11 +163,12 @@ proc enumTopLevelWindows*(): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+    let listPtr = cast[ptr seq[WindowInfo]](lParam)
     if shouldInclude(hwnd) and rootWindow(hwnd) == hwnd:
-      resultList.add(collectWindowInfo(hwnd))
+      listPtr[].add(collectWindowInfo(hwnd))
     1
 
-  discard EnumWindows(callback, 0)
+  discard EnumWindows(callback, cast[LPARAM](addr resultList))
   result = resultList
 
 proc printWindowList(windows: seq[WindowInfo]) =
