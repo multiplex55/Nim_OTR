@@ -251,7 +251,7 @@ proc pickWindow*(): Option[WindowInfo] =
     if input.len == 1 and (input[0] == 'q' or input[0] == 'Q' or input[0] == 'x' or
         input[0] == 'X'):
       return
-    if input.isDigit:
+    if input.allCharsInSet(Digits):
       let idx = parseInt(input) - 1
       if idx >= 0 and idx < windows.len:
         return some(windows[idx])
