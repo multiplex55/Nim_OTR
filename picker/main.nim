@@ -173,7 +173,7 @@ proc enumTopLevelWindows*(): seq[WindowInfo] =
 proc printWindowList(windows: seq[WindowInfo]) =
   echo "Available windows:"
   for i, win in windows:
-    let hwndHex = cast[int](win.hwnd).toHex.upper()
+    let hwndHex = cast[int](win.hwnd).toHex.toUpperAscii()
     echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}]"
 
 proc toggleHighlight(rect: RECT) =
@@ -261,4 +261,4 @@ when isMainModule:
   let selection = pickWindow()
   if selection.isSome:
     let win = selection.get()
-    echo &"Selected: {win.title} ({win.processName}) [HWND=0x{cast[int](win.hwnd).toHex.upper()}]"
+    echo &"Selected: {win.title} ({win.processName}) [HWND=0x{cast[int](win.hwnd).toHex.toUpperAscii()}]"
