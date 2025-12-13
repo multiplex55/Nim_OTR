@@ -72,6 +72,31 @@ type
 
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
+proc clampRect(rect, bounds: RECT): RECT =
+  result.left = max(rect.left, bounds.left)
+  result.top = max(rect.top, bounds.top)
+  result.right = min(rect.right, bounds.right)
+  result.bottom = min(rect.bottom, bounds.bottom)
+  if result.right < result.left:
+    result.right = result.left
+  if result.bottom < result.top:
+    result.bottom = result.top
+
+proc saveCropToConfig(rect: RECT; active: bool) =
+  appState.cfg.cropActive = active
+  appState.cfg.cropLeft = rect.left
+  appState.cfg.cropTop = rect.top
+  appState.cfg.cropWidth = rect.right - rect.left
+  appState.cfg.cropHeight = rect.bottom - rect.top
+
+proc configCropRect(cfg: OverlayConfig): RECT =
+  RECT(
+    left: cfg.cropLeft,
+    top: cfg.cropTop,
+    right: cfg.cropLeft + cfg.cropWidth,
+    bottom: cfg.cropTop + cfg.cropHeight
+  )
+
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
@@ -152,7 +177,18 @@ proc updateThumbnailProperties() =
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
 
 proc setDefaultCrop(target: HWND) =
-  appState.cropRect = clientRect(target)
+  let rect = clientRect(target)
+  appState.cropRect = rect
+  appState.hasCrop = true
+  saveCropToConfig(rect, false)
+
+proc applySavedCrop(target: HWND) =
+  let sourceRect = clientRect(target)
+  if not appState.cfg.cropActive:
+    setDefaultCrop(target)
+    return
+  let rectFromConfig = configCropRect(appState.cfg)
+  appState.cropRect = clampRect(rectFromConfig, sourceRect)
   appState.hasCrop = true
 
 proc registerThumbnail(target: HWND) =
@@ -166,23 +202,66 @@ proc registerThumbnail(target: HWND) =
     appState.thumbnail = thumbnailId
     appState.targetHwnd = target
     if not appState.hasCrop:
-      setDefaultCrop(target)
+      applySavedCrop(target)
     updateThumbnailProperties()
 
+proc mapOverlayToSource(overlayRect: RECT): RECT =
+  # The thumbnail is stretched to fill the overlay client area; map linearly without
+  # letterboxing.
+  let destRect = clientRect(appState.hwnd)
+  let sourceRect = clientRect(appState.targetHwnd)
+  let destWidth = destRect.right - destRect.left
+  let destHeight = destRect.bottom - destRect.top
+  if destWidth == 0 or destHeight == 0:
+    return sourceRect
+
+  let scaleX = (sourceRect.right - sourceRect.left).float / destWidth.float
+  let scaleY = (sourceRect.bottom - sourceRect.top).float / destHeight.float
+
+  var mapped: RECT
+  mapped.left = sourceRect.left + int((overlayRect.left - destRect.left).float * scaleX)
+  mapped.top = sourceRect.top + int((overlayRect.top - destRect.top).float * scaleY)
+  mapped.right = sourceRect.left + int((overlayRect.right - destRect.left).float * scaleX)
+  mapped.bottom = sourceRect.top + int((overlayRect.bottom - destRect.top).float * scaleY)
+
+  clampRect(mapped, sourceRect)
+
+## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
   if target != appState.targetHwnd:
     appState.hasCrop = false
     registerThumbnail(target)
 
+## Applies a crop rectangle using source window coordinates.
 proc setCrop*(rect: RECT) =
-  appState.cropRect = rect
+  if appState.targetHwnd == 0:
+    return
+  let sourceRect = clientRect(appState.targetHwnd)
+  let clamped = clampRect(rect, sourceRect)
+  appState.cropRect = clamped
   appState.hasCrop = true
+  saveCropToConfig(clamped, true)
   updateThumbnailProperties()
 
+## Maps an overlay client-area rectangle to the source window and applies the crop.
+proc setCropFromOverlayRect*(rect: RECT) =
+  if appState.targetHwnd == 0:
+    return
+  setCrop(mapOverlayToSource(rect))
+
+## Restores the crop to the full source window.
+proc resetCrop*() =
+  if appState.targetHwnd == 0:
+    return
+  setDefaultCrop(appState.targetHwnd)
+  updateThumbnailProperties()
+
+## Adjusts DWM thumbnail opacity for the overlay.
 proc setOpacity*(value: BYTE) =
   appState.opacity = value
   updateThumbnailProperties()
 
+## Toggles thumbnail visibility on the overlay window.
 proc setThumbnailVisible*(visible: bool) =
   appState.thumbnailVisible = visible
   updateThumbnailProperties()

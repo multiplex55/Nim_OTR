@@ -22,6 +22,12 @@
   - User can define and adjust a crop region with visible handles/edges.
   - Mirrored output reflects the crop immediately.
   - Crop settings persist across sessions.
+- Notes:
+  - Initial UI will expose numeric crop fields (X/Y/Width/Height) alongside a "Reset crop"
+    action to restore the full source view.
+  - Crop rectangles entered in overlay client coordinates are stretched to the source client
+    area (no letterboxing); the mapped source rect is saved and reused across sessions and
+    applied to the DWM thumbnail source rect whenever it changes.
 
 ### Opacity slider
 - Description: Adjustable transparency for the overlay.
