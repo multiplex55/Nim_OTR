@@ -1,5 +1,8 @@
+## Overlay window entry point that manages DWM thumbnails and crop state.
+
 import std/[os, strutils, widestrs]
 import winlean
+import util/geometry
 
 when not declared(CreatePopupMenu):
   proc CreatePopupMenu(): HMENU {.stdcall, dynlib: "user32", importc.}
@@ -136,15 +139,21 @@ type
 
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
-proc clampRect(rect, bounds: RECT): RECT =
-  result.left = max(rect.left, bounds.left)
-  result.top = max(rect.top, bounds.top)
-  result.right = min(rect.right, bounds.right)
-  result.bottom = min(rect.bottom, bounds.bottom)
-  if result.right < result.left:
-    result.right = result.left
-  if result.bottom < result.top:
-    result.bottom = result.top
+proc toIntRect(rect: RECT): IntRect =
+  IntRect(
+    left: rect.left.int,
+    top: rect.top.int,
+    right: rect.right.int,
+    bottom: rect.bottom.int
+  )
+
+proc toWinRect(rect: IntRect): RECT =
+  RECT(
+    left: LONG(rect.left),
+    top: LONG(rect.top),
+    right: LONG(rect.right),
+    bottom: LONG(rect.bottom)
+  )
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   appState.cfg.cropActive = active
@@ -382,7 +391,7 @@ proc applySavedCrop(target: HWND) =
     setDefaultCrop(target)
     return
   let rectFromConfig = configCropRect(appState.cfg)
-  appState.cropRect = clampRect(rectFromConfig, sourceRect)
+  appState.cropRect = clampRect(rectFromConfig.toIntRect, sourceRect.toIntRect).toWinRect
   appState.hasCrop = true
 
 proc registerThumbnail(target: HWND) =
@@ -406,23 +415,9 @@ proc registerThumbnail(target: HWND) =
 proc mapOverlayToSource(overlayRect: RECT): RECT =
   # The thumbnail is stretched to fill the overlay client area; map linearly without
   # letterboxing.
-  let destRect = clientRect(appState.hwnd)
-  let sourceRect = clientRect(appState.targetHwnd)
-  let destWidth = destRect.right - destRect.left
-  let destHeight = destRect.bottom - destRect.top
-  if destWidth == 0 or destHeight == 0:
-    return sourceRect
-
-  let scaleX = (sourceRect.right - sourceRect.left).float / destWidth.float
-  let scaleY = (sourceRect.bottom - sourceRect.top).float / destHeight.float
-
-  var mapped: RECT
-  mapped.left = sourceRect.left + int((overlayRect.left - destRect.left).float * scaleX)
-  mapped.top = sourceRect.top + int((overlayRect.top - destRect.top).float * scaleY)
-  mapped.right = sourceRect.left + int((overlayRect.right - destRect.left).float * scaleX)
-  mapped.bottom = sourceRect.top + int((overlayRect.bottom - destRect.top).float * scaleY)
-
-  clampRect(mapped, sourceRect)
+  let destRect = clientRect(appState.hwnd).toIntRect
+  let sourceRect = clientRect(appState.targetHwnd).toIntRect
+  mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
 
 ## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
@@ -442,10 +437,10 @@ proc setCrop*(rect: RECT) =
   if appState.targetHwnd == 0:
     return
   let sourceRect = clientRect(appState.targetHwnd)
-  let clamped = clampRect(rect, sourceRect)
-  appState.cropRect = clamped
+  let clamped = clampRect(rect.toIntRect, sourceRect.toIntRect)
+  appState.cropRect = clamped.toWinRect
   appState.hasCrop = true
-  saveCropToConfig(clamped, true)
+  saveCropToConfig(clamped.toWinRect, true)
   updateThumbnailProperties()
 
 ## Maps an overlay client-area rectangle to the source window and applies the crop.
