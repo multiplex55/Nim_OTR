@@ -1,4 +1,6 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
+when defined(windows):
+  {.appType: gui.}
 
 import std/[os, strutils, widestrs]
 import winlean
@@ -15,6 +17,9 @@ when not declared(TrackPopupMenu):
       dynlib: "user32", importc.}
 when not declared(DestroyMenu):
   proc DestroyMenu(hMenu: HMENU): WINBOOL {.stdcall, dynlib: "user32", importc.}
+when not declared(CheckMenuItem):
+  proc CheckMenuItem(hMenu: HMENU; uIDCheckItem: UINT; uCheck: UINT): DWORD {.
+      stdcall, dynlib: "user32", importc.}
 when not declared(SetWindowLongPtrW):
   proc SetWindowLongPtrW(hWnd: HWND; nIndex: int32; dwNewLong: LONG_PTR): LONG_PTR
       {.stdcall, dynlib: "user32", importc.}
@@ -100,6 +105,8 @@ const
 
   menuTopFlags = MF_STRING
   menuChecked = MF_CHECKED
+  menuUnchecked = MF_UNCHECKED
+  menuByCommand = MF_BYCOMMAND
 
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
@@ -117,6 +124,11 @@ const
   MB_ICONINFORMATION = 0x40
   PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
+
+let
+  menuLabelTopMost = wideCString"Always on Top"
+  menuLabelBorderless = wideCString"Borderless"
+  menuLabelExit = wideCString"Exit"
 
 type
   WindowIdentity = object
@@ -136,6 +148,8 @@ type
     thumbnailVisible: bool
     thumbnailSuppressed: bool
     promptedForReselect: bool
+    validationTimerRunning: bool
+    contextMenu: HMENU
 
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
@@ -253,20 +267,36 @@ proc restoreAndFocusTarget() =
     ## Future: forward the click to the source window when enabled.
     discard
 
-proc createContextMenu(): HMENU =
-  result = CreatePopupMenu()
-  var topFlags = menuTopFlags
-  if appState.cfg.topMost:
-    topFlags = topFlags or menuChecked
-  discard AppendMenuW(result, topFlags, idToggleTopMost, wideCString"Always on Top")
+proc createContextMenu() =
+  if appState.contextMenu != 0:
+    return
 
-  var borderFlags = menuTopFlags
-  if appState.cfg.borderless:
-    borderFlags = borderFlags or menuChecked
-  discard AppendMenuW(result, borderFlags, idToggleBorderless, wideCString"Borderless")
+  let menu = CreatePopupMenu()
+  if menu == 0:
+    return
 
-  discard AppendMenuW(result, MF_SEPARATOR, 0, nil)
-  discard AppendMenuW(result, menuTopFlags, idExit, wideCString"Exit")
+  appState.contextMenu = menu
+  discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
+  discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
+
+  discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
+  discard AppendMenuW(menu, menuTopFlags, idExit, menuLabelExit)
+
+proc updateContextMenuChecks() =
+  if appState.contextMenu == 0:
+    return
+
+  let topFlags = if appState.cfg.topMost: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  discard CheckMenuItem(appState.contextMenu, idToggleTopMost, topFlags)
+
+  let borderFlags = if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
+
+proc destroyContextMenu() =
+  if appState.contextMenu == 0:
+    return
+  discard DestroyMenu(appState.contextMenu)
+  appState.contextMenu = 0
 
 proc applyTopMost(hwnd: HWND) =
   let insertAfter = if appState.cfg.topMost: HWND_TOPMOST else: HWND_NOTOPMOST
@@ -351,6 +381,7 @@ proc detachTarget(promptUser: bool) =
   appState.targetHwnd = 0
   appState.hasCrop = false
   appState.thumbnailSuppressed = false
+  stopValidationTimer()
   if promptUser:
     promptForReselect()
 
@@ -411,6 +442,7 @@ proc registerThumbnail(target: HWND) =
     if not appState.hasCrop:
       applySavedCrop(target)
     updateThumbnailProperties()
+    startValidationTimer()
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
   # The thumbnail is stretched to fill the overlay client area; map linearly without
@@ -495,11 +527,14 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     discard
 
 proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
-  let menu = createContextMenu()
+  createContextMenu()
+  updateContextMenuChecks()
+  if appState.contextMenu == 0:
+    return
   let x = int32(loWordL(lParam))
   let y = int32(hiWordL(lParam))
   discard TrackPopupMenu(
-    menu,
+    appState.contextMenu,
     TPM_LEFTALIGN or TPM_TOPALIGN or TPM_RIGHTBUTTON,
     x,
     y,
@@ -507,16 +542,21 @@ proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
     hwnd,
     nil
   )
-  discard DestroyMenu(menu)
 
 proc saveStateOnClose() =
   saveOverlayConfig(appState.cfg)
 
 proc startValidationTimer() =
-  discard SetTimer(appState.hwnd, validationTimerId, validationIntervalMs, nil)
+  if appState.validationTimerRunning or appState.hwnd == 0 or appState.targetHwnd == 0:
+    return
+  if SetTimer(appState.hwnd, validationTimerId, validationIntervalMs, nil) != 0:
+    appState.validationTimerRunning = true
 
 proc stopValidationTimer() =
+  if not appState.validationTimerRunning:
+    return
   discard KillTimer(appState.hwnd, validationTimerId)
+  appState.validationTimerRunning = false
 
 proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
   case msg
@@ -550,6 +590,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_DESTROY:
     stopValidationTimer()
     unregisterThumbnail()
+    destroyContextMenu()
     saveStateOnClose()
     PostQuitMessage(0)
     return 0
@@ -609,8 +650,6 @@ proc run() =
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
-
-  startValidationTimer()
 
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
