@@ -17,7 +17,6 @@ when defined(release):
   switch("checks", "off")
   switch("assertions", "off")
   switch("debuginfo", "off")
-  switch("strip", "on")
   # Logging stays off unless explicitly re-enabled with -d:enableLogging
 else:
   # Debug-friendly defaults

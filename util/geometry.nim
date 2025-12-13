@@ -1,7 +1,5 @@
 ## Pure geometry helpers for mapping overlay selections to source window coordinates.
 
-import std/math
-
 ## Axis-aligned rectangle used by geometry helpers.
 type IntRect* = object
   left*: int

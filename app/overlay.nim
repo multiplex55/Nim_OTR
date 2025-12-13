@@ -1,10 +1,20 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
 when defined(windows):
-  {.appType: "gui".}
+  {.appType: gui.}
 
 import std/[os, strutils, widestrs]
 import winim/lean
 import ../util/geometry
+
+when not declared(DWM_THUMBNAIL_PROPERTIES):
+  type
+    DWM_THUMBNAIL_PROPERTIES {.pure.} = object
+      dwFlags: DWORD
+      rcDestination: RECT
+      rcSource: RECT
+      opacity: BYTE
+      fVisible: WINBOOL
+      fSourceClientAreaOnly: WINBOOL
 
 when not declared(CreatePopupMenu):
   proc CreatePopupMenu(): HMENU {.stdcall, dynlib: "user32", importc.}
@@ -85,20 +95,11 @@ when not declared(EnumWindows):
   proc EnumWindows(lpEnumFunc: EnumWindowsProc; lParam: LPARAM): WINBOOL {.
       stdcall, dynlib: "user32", importc.}
 
-type
-  DWM_THUMBNAIL_PROPERTIES {.pure.} = object
-    dwFlags: DWORD
-    rcDestination: RECT
-    rcSource: RECT
-    opacity: BYTE
-    fVisible: WINBOOL
-    fSourceClientAreaOnly: WINBOOL
-
 import ../config/storage
 
 const
-  className = wideCString"NimOTROverlayClass"
-  windowTitle = wideCString"Nim OTR Overlay"
+  className = L"NimOTROverlayClass"
+  windowTitle = L"Nim OTR Overlay"
   idToggleTopMost = 1001
   idToggleBorderless = 1002
   idExit = 1003
@@ -126,9 +127,9 @@ const
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
 let
-  menuLabelTopMost = wideCString"Always on Top"
-  menuLabelBorderless = wideCString"Borderless"
-  menuLabelExit = wideCString"Exit"
+  menuLabelTopMost = L"Always on Top"
+  menuLabelBorderless = L"Borderless"
+  menuLabelExit = L"Exit"
 
 type
   WindowIdentity = object
@@ -370,7 +371,7 @@ proc promptForReselect() =
   appState.promptedForReselect = true
   discard MessageBoxW(
     appState.hwnd,
-    wideCString"The mirrored window is no longer available. Please reselect a source window.",
+    L"The mirrored window is no longer available. Please reselect a source window.",
     windowTitle,
     MB_OK or MB_ICONINFORMATION
   )
