@@ -1,6 +1,6 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
 when defined(windows):
-  {.appType: gui.}
+  {.appType: "gui".}
 
 import std/[os, strutils, widestrs]
 import winim/lean
@@ -99,7 +99,7 @@ import ../config/storage
 
 const
   className = L"NimOTROverlayClass"
-  windowTitle = L"Nim OTR Overlay"
+  overlayTitle = L"Nim OTR Overlay"
   idToggleTopMost = 1001
   idToggleBorderless = 1002
   idExit = 1003
@@ -125,6 +125,9 @@ const
   MB_ICONINFORMATION = 0x40
   PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
+
+when not declared(WM_DPICHANGED):
+  const WM_DPICHANGED = 0x02E0
 
 let
   menuLabelTopMost = L"Always on Top"
@@ -172,17 +175,17 @@ proc toWinRect(rect: IntRect): RECT =
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   appState.cfg.cropActive = active
-  appState.cfg.cropLeft = rect.left
-  appState.cfg.cropTop = rect.top
-  appState.cfg.cropWidth = rect.right - rect.left
-  appState.cfg.cropHeight = rect.bottom - rect.top
+  appState.cfg.cropLeft = rect.left.int
+  appState.cfg.cropTop = rect.top.int
+  appState.cfg.cropWidth = (rect.right - rect.left).int
+  appState.cfg.cropHeight = (rect.bottom - rect.top).int
 
 proc configCropRect(cfg: OverlayConfig): RECT =
   RECT(
-    left: cfg.cropLeft,
-    top: cfg.cropTop,
-    right: cfg.cropLeft + cfg.cropWidth,
-    bottom: cfg.cropTop + cfg.cropHeight
+    left: LONG(cfg.cropLeft),
+    top: LONG(cfg.cropTop),
+    right: LONG(cfg.cropLeft + cfg.cropWidth),
+    bottom: LONG(cfg.cropTop + cfg.cropHeight)
   )
 
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
@@ -287,10 +290,10 @@ proc updateContextMenuChecks() =
   if appState.contextMenu == 0:
     return
 
-  let topFlags = if appState.cfg.topMost: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  let topFlags: UINT = UINT(if appState.cfg.topMost: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleTopMost, topFlags)
 
-  let borderFlags = if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  let borderFlags: UINT = UINT(if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
 
 proc destroyContextMenu() =
@@ -338,7 +341,7 @@ proc handleMove(lParam: LPARAM) =
 proc clientRect(hwnd: HWND): RECT =
   var rect: RECT
   if GetClientRect(hwnd, addr rect) != 0:
-    rect
+    result = rect
 
 proc unregisterThumbnail() =
   if appState.thumbnail != 0:
@@ -372,7 +375,7 @@ proc promptForReselect() =
   discard MessageBoxW(
     appState.hwnd,
     L"The mirrored window is no longer available. Please reselect a source window.",
-    windowTitle,
+    overlayTitle,
     MB_OK or MB_ICONINFORMATION
   )
 
@@ -619,7 +622,7 @@ proc createWindow(hInstance: HINSTANCE): HWND =
   result = CreateWindowExW(
     0,
     className,
-    windowTitle,
+    overlayTitle,
     currentStyle(),
     xpos,
     ypos,
