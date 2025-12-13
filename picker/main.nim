@@ -1,3 +1,5 @@
+## CLI helper that enumerates visible windows and lets users pick a target HWND.
+
 import std/[options, os, strformat, strutils, widestrs]
 import winlean
 
@@ -89,6 +91,7 @@ const
   R2_NOT = 6
 
 type
+  ## Captured window metadata for display and selection.
   WindowInfo* = object
     hwnd*: HWND
     title*: string
@@ -155,6 +158,7 @@ proc shouldInclude(hwnd: HWND): bool =
     return false
   true
 
+## Enumerates visible, non-tool windows and returns their metadata.
 proc enumTopLevelWindows*(): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
 
@@ -223,6 +227,7 @@ proc clickToPick(): HWND =
 
     Sleep(50)
 
+## Interactive selection entry point that returns a chosen window, if any.
 proc pickWindow*(): Option[WindowInfo] =
   var windows = enumTopLevelWindows()
   if windows.len == 0:

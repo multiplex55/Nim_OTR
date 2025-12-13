@@ -1,3 +1,5 @@
+## Persisted configuration for overlay window position, target, and crop state.
+
 import std/[json, os, strutils]
 
 const
@@ -5,6 +7,7 @@ const
   invalidCoord = -1
 
 type
+  ## User-configurable overlay layout and crop settings persisted on disk.
   OverlayConfig* = object
     x*: int
     y*: int
@@ -22,6 +25,7 @@ type
     targetTitle*: string
     targetProcess*: string
 
+## Provides default dimensions and state for a fresh overlay configuration.
 proc defaultOverlayConfig*(): OverlayConfig =
   OverlayConfig(
     x: invalidCoord,
@@ -41,12 +45,14 @@ proc defaultOverlayConfig*(): OverlayConfig =
     targetProcess: ""
   )
 
+## Path to the overlay configuration file, creating the config directory if needed.
 proc configPath*(): string =
   let base = getAppDir() / "config"
   if not dirExists(base):
     createDir(base)
   base / configFileName
 
+## Reads configuration from disk, falling back to defaults on missing or invalid files.
 proc loadOverlayConfig*(): OverlayConfig =
   let path = configPath()
   if fileExists(path):
@@ -73,6 +79,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       discard
   result = defaultOverlayConfig()
 
+## Writes the provided configuration object back to disk as JSON.
 proc saveOverlayConfig*(cfg: OverlayConfig) =
   let node = %*{
     "x": cfg.x,
@@ -93,5 +100,6 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
   }
   writeFile(configPath(), node.pretty())
 
+## Determines whether the stored window coordinates are valid values.
 proc hasValidPosition*(cfg: OverlayConfig): bool =
   cfg.x != invalidCoord and cfg.y != invalidCoord
