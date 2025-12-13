@@ -1,7 +1,4 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-when defined(windows):
-  {.appType: gui.}
-
 import std/[os, strutils, widestrs]
 import winim/lean
 import ../util/geometry
