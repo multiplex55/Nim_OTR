@@ -28,6 +28,9 @@ when not declared(DwmUpdateThumbnailProperties):
   proc DwmUpdateThumbnailProperties(hThumbnailId: HANDLE;
       ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT {.stdcall,
       dynlib: "dwmapi", importc.}
+when not declared(DwmQueryThumbnailSourceSize):
+  proc DwmQueryThumbnailSourceSize(hThumbnail: HANDLE; pSize: ptr SIZE): HRESULT
+      {.stdcall, dynlib: "dwmapi", importc.}
 when not declared(GetAsyncKeyState):
   proc GetAsyncKeyState(vKey: int32): int16 {.stdcall, dynlib: "user32", importc.}
 when not declared(IsIconic):
@@ -35,6 +38,20 @@ when not declared(IsIconic):
 when not declared(SetForegroundWindow):
   proc SetForegroundWindow(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32",
       importc.}
+when not declared(SetTimer):
+  proc SetTimer(hwnd: HWND; nIDEvent: UINT_PTR; uElapse: UINT;
+      lpTimerFunc: pointer): UINT_PTR {.stdcall, dynlib: "user32", importc.}
+when not declared(KillTimer):
+  proc KillTimer(hwnd: HWND; uIDEvent: UINT_PTR): WINBOOL {.stdcall,
+      dynlib: "user32", importc.}
+when not declared(IsWindow):
+  proc IsWindow(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32", importc.}
+when not declared(IsWindowVisible):
+  proc IsWindowVisible(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32",
+      importc.}
+when not declared(MessageBoxW):
+  proc MessageBoxW(hWnd: HWND; lpText: LPCWSTR; lpCaption: LPCWSTR;
+      uType: UINT): int32 {.stdcall, dynlib: "user32", importc.}
 
 type
   DWM_THUMBNAIL_PROPERTIES {.pure.} = object
@@ -67,6 +84,10 @@ const
   VK_SHIFT = 0x10
   HTTRANSPARENT = -1
   SW_RESTORE = 9
+  validationTimerId = 2001
+  validationIntervalMs = 750
+  MB_OK = 0x0
+  MB_ICONINFORMATION = 0x40
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
 type
@@ -80,6 +101,8 @@ type
     hasCrop: bool
     opacity: BYTE
     thumbnailVisible: bool
+    thumbnailSuppressed: bool
+    promptedForReselect: bool
 
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
@@ -122,6 +145,9 @@ proc restoreAndFocusTarget() =
   if IsIconic(target) != 0:
     discard ShowWindow(target, SW_RESTORE)
   discard SetForegroundWindow(target)
+  if appState.thumbnailSuppressed:
+    appState.thumbnailSuppressed = false
+    updateThumbnailProperties()
   when enableClickForwarding:
     ## Future: forward the click to the source window when enabled.
     discard
@@ -197,9 +223,60 @@ proc updateThumbnailProperties() =
   props.rcDestination = destRect
   props.rcSource = appState.cropRect
   props.opacity = appState.opacity
-  props.fVisible = (if appState.thumbnailVisible: 1 else: 0)
+  props.fVisible = (if appState.thumbnailVisible and not appState.thumbnailSuppressed: 1 else: 0)
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
+
+proc thumbnailHandleValid(): bool =
+  if appState.thumbnail == 0:
+    return false
+  var size: SIZE
+  DwmQueryThumbnailSourceSize(appState.thumbnail, addr size) == 0
+
+proc promptForReselect() =
+  if appState.promptedForReselect:
+    return
+  appState.promptedForReselect = true
+  discard MessageBoxW(
+    appState.hwnd,
+    wideCString"The mirrored window is no longer available. Please reselect a source window.",
+    windowTitle,
+    MB_OK or MB_ICONINFORMATION
+  )
+
+proc detachTarget(promptUser: bool) =
+  if appState.thumbnail != 0:
+    unregisterThumbnail()
+  appState.targetHwnd = 0
+  appState.hasCrop = false
+  appState.thumbnailSuppressed = false
+  if promptUser:
+    promptForReselect()
+
+proc validateTargetState() =
+  let target = appState.targetHwnd
+  if target == 0:
+    return
+
+  if IsWindow(target) == 0:
+    detachTarget(true)
+    return
+
+  if not thumbnailHandleValid():
+    registerThumbnail(target)
+
+  let minimized = IsIconic(target) != 0
+  let visible = IsWindowVisible(target) != 0
+  let shouldSuppress = minimized or not visible
+
+  if appState.thumbnailSuppressed != shouldSuppress:
+    appState.thumbnailSuppressed = shouldSuppress
+    updateThumbnailProperties()
+
+  if not shouldSuppress and appState.thumbnail == 0:
+    registerThumbnail(target)
+  elif not shouldSuppress:
+    updateThumbnailProperties()
 
 proc setDefaultCrop(target: HWND) =
   let rect = clientRect(target)
@@ -255,6 +332,8 @@ proc mapOverlayToSource(overlayRect: RECT): RECT =
 proc setTargetWindow*(target: HWND) =
   if target != appState.targetHwnd:
     appState.hasCrop = false
+    appState.thumbnailSuppressed = false
+    appState.promptedForReselect = false
     registerThumbnail(target)
 
 ## Applies a crop rectangle using source window coordinates.
@@ -336,6 +415,12 @@ proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
 proc saveStateOnClose() =
   saveOverlayConfig(appState.cfg)
 
+proc startValidationTimer() =
+  discard SetTimer(appState.hwnd, validationTimerId, validationIntervalMs, nil)
+
+proc stopValidationTimer() =
+  discard KillTimer(appState.hwnd, validationTimerId)
+
 proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
   case msg
   of WM_SIZE:
@@ -361,7 +446,12 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     if shiftHeld():
       restoreAndFocusTarget()
     return DefWindowProcW(hwnd, msg, wParam, lParam)
+  of WM_TIMER:
+    if wParam == validationTimerId:
+      validateTargetState()
+      return 0
   of WM_DESTROY:
+    stopValidationTimer()
     unregisterThumbnail()
     saveStateOnClose()
     PostQuitMessage(0)
@@ -414,6 +504,8 @@ proc run() =
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
+
+  startValidationTimer()
 
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
