@@ -9,7 +9,7 @@ license         = "MIT"
 requires "nim >= 1.6"
 
 # Tasks
-bin             = @[]
+bin             = @["app/overlay"]
 
 # Settings
 # Use nimpretty for formatting; keep exported procs/types documented.
