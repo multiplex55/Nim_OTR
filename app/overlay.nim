@@ -158,6 +158,10 @@ type
     validationTimerRunning: bool
     contextMenu: HMENU
 
+  SearchContext = object
+    cfg: ptr OverlayConfig
+    found: ptr HWND
+
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
 proc toIntRect(rect: RECT): IntRect =
@@ -247,17 +251,22 @@ proc findWindowByIdentity(cfg: OverlayConfig): HWND =
     return 0
 
   var found: HWND = 0
+  var cfgCopy = cfg
+  var context = SearchContext(cfg: addr cfgCopy, found: addr found)
 
-  proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+  proc enumMatchWindow(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+    let ctx = cast[ptr SearchContext](lParam)
+    if ctx == nil:
+      return 0
     if IsWindowVisible(hwnd) == 0:
       return 1
     let identity = collectWindowIdentity(hwnd)
-    if matchesStoredWindow(identity, cfg):
-      found = hwnd
+    if matchesStoredWindow(identity, ctx.cfg[]):
+      ctx.found[] = hwnd
       return 0
     1
 
-  discard EnumWindows(callback, 0)
+  discard EnumWindows(enumMatchWindow, cast[LPARAM](addr context))
   found
 
 proc restoreAndFocusTarget() =
