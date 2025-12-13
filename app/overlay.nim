@@ -1,4 +1,4 @@
-import std/widestrs
+import std/[os, strutils, widestrs]
 import winlean
 
 when not declared(CreatePopupMenu):
@@ -52,6 +52,30 @@ when not declared(IsWindowVisible):
 when not declared(MessageBoxW):
   proc MessageBoxW(hWnd: HWND; lpText: LPCWSTR; lpCaption: LPCWSTR;
       uType: UINT): int32 {.stdcall, dynlib: "user32", importc.}
+when not declared(GetWindowTextLengthW):
+  proc GetWindowTextLengthW(hWnd: HWND): int32 {.stdcall, dynlib: "user32",
+      importc.}
+when not declared(GetWindowTextW):
+  proc GetWindowTextW(hWnd: HWND; lpString: LPWSTR; nMaxCount: int32): int32 {.
+      stdcall, dynlib: "user32", importc.}
+when not declared(GetWindowThreadProcessId):
+  proc GetWindowThreadProcessId(hwnd: HWND; lpdwProcessId: ptr DWORD): DWORD {.
+      stdcall, dynlib: "user32", importc.}
+when not declared(OpenProcess):
+  proc OpenProcess(dwDesiredAccess: DWORD; bInheritHandle: WINBOOL;
+      dwProcessId: DWORD): HANDLE {.stdcall, dynlib: "kernel32", importc.}
+when not declared(CloseHandle):
+  proc CloseHandle(hObject: HANDLE): WINBOOL {.stdcall, dynlib: "kernel32",
+      importc.}
+when not declared(QueryFullProcessImageNameW):
+  proc QueryFullProcessImageNameW(hProcess: HANDLE; dwFlags: DWORD;
+      lpExeName: LPWSTR; lpdwSize: ptr DWORD): WINBOOL {.stdcall,
+      dynlib: "kernel32", importc.}
+when not declared(EnumWindows):
+  type
+    EnumWindowsProc = proc(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.}
+  proc EnumWindows(lpEnumFunc: EnumWindowsProc; lParam: LPARAM): WINBOOL {.
+      stdcall, dynlib: "user32", importc.}
 
 type
   DWM_THUMBNAIL_PROPERTIES {.pure.} = object
@@ -88,9 +112,15 @@ const
   validationIntervalMs = 750
   MB_OK = 0x0
   MB_ICONINFORMATION = 0x40
+  PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
 type
+  WindowIdentity = object
+    hwnd: HWND
+    title: string
+    processName: string
+
   AppState = object
     cfg: OverlayConfig
     hInstance: HINSTANCE
@@ -137,6 +167,68 @@ proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
 
 proc shiftHeld(): bool =
   (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
+
+proc windowTitle(hwnd: HWND): string =
+  let length = GetWindowTextLengthW(hwnd)
+  if length <= 0:
+    return
+  var buf = newWideCString(length + 1)
+  discard GetWindowTextW(hwnd, buf, length + 1)
+  $buf
+
+proc windowProcessName(hwnd: HWND): string =
+  var pid: DWORD
+  discard GetWindowThreadProcessId(hwnd, addr pid)
+  if pid == 0:
+    return ""
+
+  let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+  if handle == 0:
+    return ""
+
+  var size = 260.DWORD
+  var buffer = newWideCString(int(size))
+  if QueryFullProcessImageNameW(handle, 0, buffer, addr size) != 0:
+    let path = $buffer
+    result = splitFile(path).name
+  discard CloseHandle(handle)
+
+proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
+  WindowIdentity(
+    hwnd: hwnd,
+    title: windowTitle(hwnd),
+    processName: windowProcessName(hwnd)
+  )
+
+proc matchesStoredWindow(win: WindowIdentity; cfg: OverlayConfig): bool =
+  let processMatches = cfg.targetProcess.len > 0 and
+      cmpIgnoreCase(win.processName, cfg.targetProcess) == 0
+  let titleMatches = cfg.targetTitle.len > 0 and win.title == cfg.targetTitle
+
+  if cfg.targetProcess.len > 0 and cfg.targetTitle.len > 0:
+    processMatches and titleMatches
+  elif cfg.targetProcess.len > 0:
+    processMatches
+  else:
+    titleMatches
+
+proc findWindowByIdentity(cfg: OverlayConfig): HWND =
+  if cfg.targetTitle.len == 0 and cfg.targetProcess.len == 0:
+    return 0
+
+  var found: HWND = 0
+
+  proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+    if IsWindowVisible(hwnd) == 0:
+      return 1
+    let identity = collectWindowIdentity(hwnd)
+    if matchesStoredWindow(identity, cfg):
+      found = hwnd
+      return 0
+    1
+
+  discard EnumWindows(callback, 0)
+  found
 
 proc restoreAndFocusTarget() =
   let target = appState.targetHwnd
@@ -303,6 +395,10 @@ proc registerThumbnail(target: HWND) =
   if DwmRegisterThumbnail(appState.hwnd, target, addr thumbnailId) == 0:
     appState.thumbnail = thumbnailId
     appState.targetHwnd = target
+    let identity = collectWindowIdentity(target)
+    appState.cfg.targetHwnd = cast[int](identity.hwnd)
+    appState.cfg.targetTitle = identity.title
+    appState.cfg.targetProcess = identity.processName
     if not appState.hasCrop:
       applySavedCrop(target)
     updateThumbnailProperties()
@@ -335,6 +431,11 @@ proc setTargetWindow*(target: HWND) =
     appState.thumbnailSuppressed = false
     appState.promptedForReselect = false
     registerThumbnail(target)
+    if appState.targetHwnd != 0:
+      let identity = collectWindowIdentity(appState.targetHwnd)
+      appState.cfg.targetHwnd = cast[int](identity.hwnd)
+      appState.cfg.targetTitle = identity.title
+      appState.cfg.targetProcess = identity.processName
 
 ## Applies a crop rectangle using source window coordinates.
 proc setCrop*(rect: RECT) =
@@ -363,6 +464,7 @@ proc resetCrop*() =
 ## Adjusts DWM thumbnail opacity for the overlay.
 proc setOpacity*(value: BYTE) =
   appState.opacity = value
+  appState.cfg.opacity = int(value)
   updateThumbnailProperties()
 
 ## Toggles thumbnail visibility on the overlay window.
@@ -494,6 +596,8 @@ proc createWindow(hInstance: HINSTANCE): HWND =
 
 proc run() =
   appState.cfg = loadOverlayConfig()
+  let storedOpacity = max(min(appState.cfg.opacity, 255), 0)
+  appState.opacity = BYTE(storedOpacity)
   appState.hInstance = GetModuleHandleW(nil)
   appState.hwnd = createWindow(appState.hInstance)
   if appState.hwnd == 0:
@@ -501,6 +605,12 @@ proc run() =
 
   applyStyle(appState.hwnd)
   applyTopMost(appState.hwnd)
+
+  let storedTarget = HWND(appState.cfg.targetHwnd)
+  if storedTarget != 0 and IsWindow(storedTarget) != 0:
+    registerThumbnail(storedTarget)
+  elif appState.targetHwnd == 0:
+    registerThumbnail(findWindowByIdentity(appState.cfg))
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
