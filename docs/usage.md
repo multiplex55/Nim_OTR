@@ -3,10 +3,14 @@
 ## Build
 1. Install Nim (>= 1.6) and Nimble.
 2. Install dependencies if added via `nimble install`.
-3. Build the project:
+3. Build a Windows GUI release binary (standalone EXE):
    ```bash
-   nimble build
+   nimble build -d:release
    ```
+   - `config.nims` pins the Windows GUI target (`--app:gui`), enforces the ARC/ORC memory
+     model, strips symbols, and disables logging by default for release builds.
+   - Omit `-d:release` to compile with debug defaults (`--debuginfo`, assertions, and
+     logging enabled via `-d:enableLogging`).
 
 ## Run
 - Launch the compiled binary from `app/` entry point once implemented.
