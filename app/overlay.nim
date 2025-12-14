@@ -404,7 +404,11 @@ proc computeStatusText(): string =
 proc rectDescription(rect: RECT): string =
   "L:" & $rect.left & " T:" & $rect.top & " R:" & $rect.right & " B:" & $rect.bottom
 
-proc boolLabel(value: bool): string = if value: "Yes" else: "No"
+proc boolLabel(flag: bool): string =
+  if flag:
+    "Yes"
+  else:
+    "No"
 
 proc showDebugInfo() =
   var lines: seq[string] = @[]
