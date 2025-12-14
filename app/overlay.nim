@@ -173,15 +173,17 @@ type
     clickThroughEnabled: bool
     selectingTarget: bool
 
-  SearchContext = object
-    cfg: ptr OverlayConfig
-    found: ptr HWND
-
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
   clickThroughEnabled: true
 )
+
+proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
+  WindowEligibilityOptions(includeCloaked: cfg.includeCloaked)
+
+proc currentEligibilityOptions(): WindowEligibilityOptions =
+  eligibilityOptions(appState.cfg)
 
 proc toIntRect(rect: RECT): IntRect =
   IntRect(
@@ -253,7 +255,7 @@ proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
     processName: windowProcessName(hwnd)
   )
 
-proc matchesStoredWindow(win: WindowIdentity; cfg: OverlayConfig): bool =
+proc matchesStoredWindow(win: core.WindowInfo; cfg: OverlayConfig): bool =
   let processMatches = cfg.targetProcess.len > 0 and
       cmpIgnoreCase(win.processName, cfg.targetProcess) == 0
   let titleMatches = cfg.targetTitle.len > 0 and win.title == cfg.targetTitle
@@ -265,28 +267,14 @@ proc matchesStoredWindow(win: WindowIdentity; cfg: OverlayConfig): bool =
   else:
     titleMatches
 
-proc findWindowByIdentity*(cfg: OverlayConfig): HWND =
+proc findWindowByIdentity*(cfg: OverlayConfig; opts: WindowEligibilityOptions): HWND =
   if cfg.targetTitle.len == 0 and cfg.targetProcess.len == 0:
     return 0
 
-  var found: HWND = 0
-  var cfgCopy = cfg
-  var context = SearchContext(cfg: addr cfgCopy, found: addr found)
-
-  proc enumMatchWindow(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
-    let ctx = cast[ptr SearchContext](lParam)
-    if ctx == nil:
-      return 0
-    if IsWindowVisible(hwnd) == 0:
-      return 1
-    let identity = collectWindowIdentity(hwnd)
-    if matchesStoredWindow(identity, ctx.cfg[]):
-      ctx.found[] = hwnd
-      return 0
-    1
-
-  discard EnumWindows(enumMatchWindow, cast[LPARAM](addr context))
-  found
+  for win in enumTopLevelWindows(opts):
+    if matchesStoredWindow(win, cfg):
+      return win.hwnd
+  0
 
 proc restoreAndFocusTarget() =
   let target = appState.targetHwnd
@@ -566,7 +554,7 @@ proc selectTarget() =
     appState.clickThroughEnabled = previousClickThrough
     appState.selectingTarget = false
 
-  let selection = clickToPickWindow()
+  let selection = clickToPickWindow(currentEligibilityOptions())
   if selection.isSome:
     let win = selection.get()
     setTargetWindow(win.hwnd)

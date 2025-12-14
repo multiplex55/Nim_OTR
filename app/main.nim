@@ -8,15 +8,16 @@ import ../picker/cli
 import overlay
 
 proc selectInitialTarget(cfg: var OverlayConfig): HWND =
+  let opts = eligibilityOptions(cfg)
   let storedHandle = HWND(cfg.targetHwnd)
   if storedHandle != 0 and IsWindow(storedHandle) != 0:
     return storedHandle
 
-  let matched = findWindowByIdentity(cfg)
+  let matched = findWindowByIdentity(cfg, opts)
   if matched != 0:
     return matched
 
-  let selection = pickWindow()
+  let selection = pickWindow(opts)
   if selection.isSome:
     let win = selection.get()
     cfg.targetHwnd = cast[int](win.hwnd)
