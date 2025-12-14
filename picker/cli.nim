@@ -1,7 +1,6 @@
 ## CLI helper that enumerates visible windows and lets users pick a target HWND.
 
 import std/[options, strformat, strutils]
-import winim/lean
 
 import core
 
