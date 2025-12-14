@@ -172,6 +172,7 @@ type
     contextMenu: HMENU
     clickThroughEnabled: bool
     selectingTarget: bool
+    statusText: string
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -369,6 +370,9 @@ proc unregisterThumbnail() =
     discard DwmUnregisterThumbnail(appState.thumbnail)
     appState.thumbnail = 0
 
+proc invalidateStatus() =
+  discard InvalidateRect(appState.hwnd, nil, true)
+
 proc updateThumbnailProperties() =
   if appState.thumbnail == 0:
     return
@@ -400,6 +404,46 @@ proc promptForReselect() =
     MB_OK or MB_ICONINFORMATION
   )
 
+proc computeStatusText(): string =
+  let selectAction = "Right-click → Select Window… (Ctrl+Shift+P)"
+  if appState.targetHwnd == 0:
+    if appState.promptedForReselect:
+      return "Source window closed. " & selectAction
+    return "No window selected. " & selectAction
+
+  if appState.thumbnailSuppressed:
+    return "Source is minimized or hidden. Restore it or " & selectAction
+
+  ""
+
+proc updateStatusText() =
+  let nextStatus = computeStatusText()
+  if nextStatus != appState.statusText:
+    appState.statusText = nextStatus
+    invalidateStatus()
+
+proc paintStatus(hwnd: HWND) =
+  var ps: PAINTSTRUCT
+  let hdc = BeginPaint(hwnd, addr ps)
+  defer:
+    discard EndPaint(hwnd, addr ps)
+
+  let status = appState.statusText
+  if status.len == 0:
+    return
+
+  var rect = clientRect(hwnd)
+  discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
+  discard SetBkMode(hdc, TRANSPARENT)
+  discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
+  discard DrawTextW(
+    hdc,
+    status.newWideCString,
+    -1,
+    addr rect,
+    DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
+  )
+
 proc detachTarget(promptUser: bool) =
   if appState.thumbnail != 0:
     unregisterThumbnail()
@@ -409,6 +453,7 @@ proc detachTarget(promptUser: bool) =
   stopValidationTimer()
   if promptUser:
     promptForReselect()
+  updateStatusText()
 
 proc validateTargetState() =
   let target = appState.targetHwnd
@@ -429,6 +474,7 @@ proc validateTargetState() =
   if appState.thumbnailSuppressed != shouldSuppress:
     appState.thumbnailSuppressed = shouldSuppress
     updateThumbnailProperties()
+    updateStatusText()
 
   if not shouldSuppress and appState.thumbnail == 0:
     registerThumbnail(target)
@@ -468,6 +514,7 @@ proc registerThumbnail(target: HWND) =
       applySavedCrop(target)
     updateThumbnailProperties()
     startValidationTimer()
+  updateStatusText()
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
   # The thumbnail is stretched to fill the overlay client area; map linearly without
@@ -488,6 +535,7 @@ proc setTargetWindow*(target: HWND) =
       appState.cfg.targetHwnd = cast[int](identity.hwnd)
       appState.cfg.targetTitle = identity.title
       appState.cfg.targetProcess = identity.processName
+    updateStatusText()
 
 ## Applies a crop rectangle using source window coordinates.
 proc setCrop*(rect: RECT) =
@@ -628,6 +676,9 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_CONTEXTMENU:
     handleContextMenu(hwnd, lParam)
     return 0
+  of WM_PAINT:
+    paintStatus(hwnd)
+    return 0
   of WM_NCHITTEST:
     if appState.clickThroughEnabled and not shiftHeld():
       return HTTRANSPARENT
@@ -698,6 +749,7 @@ proc initOverlay*(cfg: OverlayConfig): bool =
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
+  updateStatusText()
 
   result = true
 
