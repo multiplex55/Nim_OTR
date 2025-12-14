@@ -1,8 +1,9 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[options, strutils]
+import std/[json, options, strutils]
 import winim/lean
 import ../config/storage
 import ../util/[geometry, winutils]
+import ../util/logger
 import ../win/dwmapi
 import ../picker/core
 
@@ -24,7 +25,8 @@ const
   idToggleBorderless = 1002
   idEditCrop = 1003
   idResetCrop = 1004
-  idExit = 1005
+  idShowDebugInfo = 1005
+  idExit = 1006
 
   idCropLeft = 2001
   idCropTop = 2002
@@ -63,6 +65,7 @@ let
   menuLabelBorderless = L"Borderless"
   menuLabelCrop = L"Crop…"
   menuLabelResetCrop = L"Reset Crop"
+  menuLabelDebugInfo = L"Debug Info"
   menuLabelExit = L"Exit"
 
   cropDialogClass = L"NimOTRCropDialog"
@@ -289,6 +292,8 @@ proc createContextMenu() =
   discard AppendMenuW(menu, menuTopFlags, idResetCrop, menuLabelResetCrop)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
+  discard AppendMenuW(menu, menuTopFlags, idShowDebugInfo, menuLabelDebugInfo)
+  discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idExit, menuLabelExit)
 
 proc updateContextMenuChecks() =
@@ -396,6 +401,42 @@ proc computeStatusText(): string =
 
   ""
 
+proc rectDescription(rect: RECT): string =
+  "L:" & $rect.left & " T:" & $rect.top & " R:" & $rect.right & " B:" & $rect.bottom
+
+proc boolLabel(flag: bool): string =
+  if flag:
+    "Yes"
+  else:
+    "No"
+
+proc showDebugInfo() =
+  var lines: seq[string] = @[]
+  if appState.targetHwnd == 0:
+    lines.add("Target: None")
+  else:
+    let identity = collectWindowIdentity(appState.targetHwnd)
+    lines.add("HWND: 0x" & toHex(int(identity.hwnd), 8))
+    lines.add("Title: " & identity.title)
+    lines.add("Process: " & identity.processName)
+    lines.add("Process Path: " & identity.processPath)
+
+  lines.add("Thumbnail Registered: " & boolLabel(appState.thumbnail != 0))
+  lines.add(
+    "Thumbnail Visible: " & boolLabel(appState.thumbnailVisible and not appState.thumbnailSuppressed)
+  )
+  lines.add("Thumbnail Suppressed: " & boolLabel(appState.thumbnailSuppressed))
+  let crop = currentCropRect()
+  lines.add("Crop: " & rectDescription(crop))
+  lines.add("Opacity: " & $int(appState.opacity))
+
+  discard MessageBoxW(
+    appState.hwnd,
+    lines.join("\n").newWideCString,
+    L"Debug Info",
+    MB_OK or MB_ICONINFORMATION
+  )
+
 proc updateStatusText() =
   let nextStatus = computeStatusText()
   if nextStatus != appState.statusText:
@@ -442,20 +483,41 @@ proc validateTargetState() =
     return
 
   if IsWindow(target) == 0:
+    logEvent("validation", [("hwnd", %*int(target)), ("exists", %*false)])
     detachTarget(true)
     return
-
-  if not thumbnailHandleValid():
-    registerThumbnail(target)
 
   let minimized = IsIconic(target) != 0
   let visible = IsWindowVisible(target) != 0
   let shouldSuppress = minimized or not visible
+  let validThumbnail = thumbnailHandleValid()
+  logEvent(
+    "validation",
+    [
+      ("hwnd", %*int(target)),
+      ("exists", %*true),
+      ("thumbnailValid", %*validThumbnail),
+      ("minimized", %*minimized),
+      ("visible", %*visible),
+      ("suppressed", %*shouldSuppress)
+    ]
+  )
+
+  if not thumbnailHandleValid():
+    registerThumbnail(target)
 
   if appState.thumbnailSuppressed != shouldSuppress:
     appState.thumbnailSuppressed = shouldSuppress
     updateThumbnailProperties()
     updateStatusText()
+    logEvent(
+      "thumbnail_suppression",
+      [
+        ("hwnd", %*int(target)),
+        ("suppressed", %*shouldSuppress),
+        ("reason", %*(if minimized: "minimized" else: "hidden"))
+      ]
+    )
 
   if not shouldSuppress and appState.thumbnail == 0:
     registerThumbnail(target)
@@ -487,6 +549,7 @@ proc registerThumbnail(target: HWND) =
   unregisterThumbnail()
   appState.targetHwnd = 0
   if target == 0:
+    logEvent("thumbnail_registration", [("status", %*"cleared")])
     return
 
   var thumbnailId: HANDLE
@@ -502,6 +565,24 @@ proc registerThumbnail(target: HWND) =
       applySavedCrop(target)
     updateThumbnailProperties()
     startValidationTimer()
+    logEvent(
+      "thumbnail_registration",
+      [
+        ("status", %*"registered"),
+        ("hwnd", %*int(identity.hwnd)),
+        ("title", %*identity.title),
+        ("process", %*identity.processName),
+        ("processPath", %*identity.processPath)
+      ]
+    )
+  else:
+    logEvent(
+      "thumbnail_registration",
+      [
+        ("status", %*"failed"),
+        ("hwnd", %*int(target))
+      ]
+    )
   updateStatusText()
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
@@ -734,6 +815,15 @@ proc setTargetWindow*(target: HWND) =
       appState.cfg.targetTitle = identity.title
       appState.cfg.targetProcess = identity.processName
       appState.cfg.targetProcessPath = identity.processPath
+      logEvent(
+        "selection",
+        [
+          ("hwnd", %*int(identity.hwnd)),
+          ("title", %*identity.title),
+          ("process", %*identity.processName),
+          ("processPath", %*identity.processPath)
+        ]
+      )
     updateStatusText()
     updateCropDialogFields()
 
@@ -813,6 +903,8 @@ proc selectTarget() =
   if selection.isSome:
     let win = selection.get()
     setTargetWindow(win.hwnd)
+  else:
+    logEvent("selection", [("status", %*"cancelled")])
 
 proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   case loWord(wParam)
@@ -828,6 +920,8 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
+  of idShowDebugInfo:
+    showDebugInfo()
   of idExit:
     discard PostMessageW(hwnd, WM_CLOSE, 0, 0)
   else:
@@ -947,6 +1041,7 @@ proc createWindow(hInstance: HINSTANCE): HWND =
 
 proc initOverlay*(cfg: OverlayConfig): bool =
   appState.cfg = cfg
+  initLogger(appState.cfg)
   let storedOpacity = max(min(appState.cfg.opacity, 255), 0)
   appState.opacity = BYTE(storedOpacity)
   appState.hInstance = GetModuleHandleW(nil)
