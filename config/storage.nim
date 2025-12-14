@@ -1,6 +1,6 @@
 ## Persisted configuration for overlay window position, target, and crop state.
 
-import std/[json, os, strutils]
+import std/[json, os]
 
 const
   configFileName = "overlay_config.json"
@@ -24,6 +24,21 @@ type
     targetHwnd*: int
     targetTitle*: string
     targetProcess*: string
+
+proc readIntField(data: JsonNode; key: string; dest: var int) =
+  let node = data.getOrDefault(key)
+  if node.kind != JNull:
+    dest = node.getInt()
+
+proc readBoolField(data: JsonNode; key: string; dest: var bool) =
+  let node = data.getOrDefault(key)
+  if node.kind != JNull:
+    dest = node.getBool()
+
+proc readStringField(data: JsonNode; key: string; dest: var string) =
+  let node = data.getOrDefault(key)
+  if node.kind != JNull:
+    dest = node.getStr()
 
 ## Provides default dimensions and state for a fresh overlay configuration.
 proc defaultOverlayConfig*(): OverlayConfig =
@@ -59,21 +74,21 @@ proc loadOverlayConfig*(): OverlayConfig =
     try:
       let data = parseJson(readFile(path))
       result = defaultOverlayConfig()
-      result.x = data.getOrDefault("x", result.x).getInt()
-      result.y = data.getOrDefault("y", result.y).getInt()
-      result.width = data.getOrDefault("width", result.width).getInt()
-      result.height = data.getOrDefault("height", result.height).getInt()
-      result.topMost = data.getOrDefault("topMost", result.topMost).getBool()
-      result.borderless = data.getOrDefault("borderless", result.borderless).getBool()
-      result.cropActive = data.getOrDefault("cropActive", result.cropActive).getBool()
-      result.cropLeft = data.getOrDefault("cropLeft", result.cropLeft).getInt()
-      result.cropTop = data.getOrDefault("cropTop", result.cropTop).getInt()
-      result.cropWidth = data.getOrDefault("cropWidth", result.cropWidth).getInt()
-      result.cropHeight = data.getOrDefault("cropHeight", result.cropHeight).getInt()
-      result.opacity = data.getOrDefault("opacity", result.opacity).getInt()
-      result.targetHwnd = data.getOrDefault("targetHwnd", result.targetHwnd).getInt()
-      result.targetTitle = data.getOrDefault("targetTitle", result.targetTitle).getStr()
-      result.targetProcess = data.getOrDefault("targetProcess", result.targetProcess).getStr()
+      readIntField(data, "x", result.x)
+      readIntField(data, "y", result.y)
+      readIntField(data, "width", result.width)
+      readIntField(data, "height", result.height)
+      readBoolField(data, "topMost", result.topMost)
+      readBoolField(data, "borderless", result.borderless)
+      readBoolField(data, "cropActive", result.cropActive)
+      readIntField(data, "cropLeft", result.cropLeft)
+      readIntField(data, "cropTop", result.cropTop)
+      readIntField(data, "cropWidth", result.cropWidth)
+      readIntField(data, "cropHeight", result.cropHeight)
+      readIntField(data, "opacity", result.opacity)
+      readIntField(data, "targetHwnd", result.targetHwnd)
+      readStringField(data, "targetTitle", result.targetTitle)
+      readStringField(data, "targetProcess", result.targetProcess)
       return
     except CatchableError:
       discard

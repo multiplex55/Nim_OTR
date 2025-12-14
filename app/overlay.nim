@@ -1,10 +1,17 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-when defined(windows):
-  {.appType: gui.}
-
 import std/[os, strutils, widestrs]
-import winlean
-import util/geometry
+import winim/lean
+import ../util/geometry
+
+when not declared(DWM_THUMBNAIL_PROPERTIES):
+  type
+    DWM_THUMBNAIL_PROPERTIES {.pure.} = object
+      dwFlags: DWORD
+      rcDestination: RECT
+      rcSource: RECT
+      opacity: BYTE
+      fVisible: WINBOOL
+      fSourceClientAreaOnly: WINBOOL
 
 when not declared(CreatePopupMenu):
   proc CreatePopupMenu(): HMENU {.stdcall, dynlib: "user32", importc.}
@@ -85,20 +92,17 @@ when not declared(EnumWindows):
   proc EnumWindows(lpEnumFunc: EnumWindowsProc; lParam: LPARAM): WINBOOL {.
       stdcall, dynlib: "user32", importc.}
 
-type
-  DWM_THUMBNAIL_PROPERTIES {.pure.} = object
-    dwFlags: DWORD
-    rcDestination: RECT
-    rcSource: RECT
-    opacity: BYTE
-    fVisible: WINBOOL
-    fSourceClientAreaOnly: WINBOOL
+import ../config/storage
 
-import config/storage
+## Forward declarations for routines used before their definitions.
+proc updateThumbnailProperties()
+proc registerThumbnail(target: HWND)
+proc startValidationTimer()
+proc stopValidationTimer()
 
 const
-  className = wideCString"NimOTROverlayClass"
-  windowTitle = wideCString"Nim OTR Overlay"
+  className = L"NimOTROverlayClass"
+  overlayTitle = L"Nim OTR Overlay"
   idToggleTopMost = 1001
   idToggleBorderless = 1002
   idExit = 1003
@@ -125,10 +129,13 @@ const
   PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
+when not declared(WM_DPICHANGED):
+  const WM_DPICHANGED = 0x02E0
+
 let
-  menuLabelTopMost = wideCString"Always on Top"
-  menuLabelBorderless = wideCString"Borderless"
-  menuLabelExit = wideCString"Exit"
+  menuLabelTopMost = L"Always on Top"
+  menuLabelBorderless = L"Borderless"
+  menuLabelExit = L"Exit"
 
 type
   WindowIdentity = object
@@ -151,6 +158,10 @@ type
     validationTimerRunning: bool
     contextMenu: HMENU
 
+  SearchContext = object
+    cfg: ptr OverlayConfig
+    found: ptr HWND
+
 var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
 
 proc toIntRect(rect: RECT): IntRect =
@@ -171,17 +182,17 @@ proc toWinRect(rect: IntRect): RECT =
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   appState.cfg.cropActive = active
-  appState.cfg.cropLeft = rect.left
-  appState.cfg.cropTop = rect.top
-  appState.cfg.cropWidth = rect.right - rect.left
-  appState.cfg.cropHeight = rect.bottom - rect.top
+  appState.cfg.cropLeft = rect.left.int
+  appState.cfg.cropTop = rect.top.int
+  appState.cfg.cropWidth = (rect.right - rect.left).int
+  appState.cfg.cropHeight = (rect.bottom - rect.top).int
 
 proc configCropRect(cfg: OverlayConfig): RECT =
   RECT(
-    left: cfg.cropLeft,
-    top: cfg.cropTop,
-    right: cfg.cropLeft + cfg.cropWidth,
-    bottom: cfg.cropTop + cfg.cropHeight
+    left: LONG(cfg.cropLeft),
+    top: LONG(cfg.cropTop),
+    right: LONG(cfg.cropLeft + cfg.cropWidth),
+    bottom: LONG(cfg.cropTop + cfg.cropHeight)
   )
 
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
@@ -240,17 +251,22 @@ proc findWindowByIdentity(cfg: OverlayConfig): HWND =
     return 0
 
   var found: HWND = 0
+  var cfgCopy = cfg
+  var context = SearchContext(cfg: addr cfgCopy, found: addr found)
 
-  proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+  proc enumMatchWindow(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+    let ctx = cast[ptr SearchContext](lParam)
+    if ctx == nil:
+      return 0
     if IsWindowVisible(hwnd) == 0:
       return 1
     let identity = collectWindowIdentity(hwnd)
-    if matchesStoredWindow(identity, cfg):
-      found = hwnd
+    if matchesStoredWindow(identity, ctx.cfg[]):
+      ctx.found[] = hwnd
       return 0
     1
 
-  discard EnumWindows(callback, 0)
+  discard EnumWindows(enumMatchWindow, cast[LPARAM](addr context))
   found
 
 proc restoreAndFocusTarget() =
@@ -286,10 +302,10 @@ proc updateContextMenuChecks() =
   if appState.contextMenu == 0:
     return
 
-  let topFlags = if appState.cfg.topMost: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  let topFlags: UINT = UINT(if appState.cfg.topMost: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleTopMost, topFlags)
 
-  let borderFlags = if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked
+  let borderFlags: UINT = UINT(if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
 
 proc destroyContextMenu() =
@@ -337,7 +353,7 @@ proc handleMove(lParam: LPARAM) =
 proc clientRect(hwnd: HWND): RECT =
   var rect: RECT
   if GetClientRect(hwnd, addr rect) != 0:
-    rect
+    result = rect
 
 proc unregisterThumbnail() =
   if appState.thumbnail != 0:
@@ -370,8 +386,8 @@ proc promptForReselect() =
   appState.promptedForReselect = true
   discard MessageBoxW(
     appState.hwnd,
-    wideCString"The mirrored window is no longer available. Please reselect a source window.",
-    windowTitle,
+    L"The mirrored window is no longer available. Please reselect a source window.",
+    overlayTitle,
     MB_OK or MB_ICONINFORMATION
   )
 
@@ -612,18 +628,18 @@ proc createWindow(hInstance: HINSTANCE): HWND =
     return 0
 
   let useDefault = not hasValidPosition(appState.cfg)
-  let xpos = if useDefault: CW_USEDEFAULT else: appState.cfg.x
-  let ypos = if useDefault: CW_USEDEFAULT else: appState.cfg.y
+  let xpos = if useDefault: CW_USEDEFAULT else: int32(appState.cfg.x)
+  let ypos = if useDefault: CW_USEDEFAULT else: int32(appState.cfg.y)
 
   result = CreateWindowExW(
     0,
     className,
-    windowTitle,
+    overlayTitle,
     currentStyle(),
     xpos,
     ypos,
-    appState.cfg.width,
-    appState.cfg.height,
+    int32(appState.cfg.width),
+    int32(appState.cfg.height),
     0,
     0,
     hInstance,

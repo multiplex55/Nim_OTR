@@ -1,7 +1,7 @@
 ## CLI helper that enumerates visible windows and lets users pick a target HWND.
 
 import std/[options, os, strformat, strutils, widestrs]
-import winlean
+import winim/lean
 
 when not declared(EnumWindows):
   type
@@ -163,17 +163,18 @@ proc enumTopLevelWindows*(): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
+    let listPtr = cast[ptr seq[WindowInfo]](lParam)
     if shouldInclude(hwnd) and rootWindow(hwnd) == hwnd:
-      resultList.add(collectWindowInfo(hwnd))
+      listPtr[].add(collectWindowInfo(hwnd))
     1
 
-  discard EnumWindows(callback, 0)
+  discard EnumWindows(callback, cast[LPARAM](addr resultList))
   result = resultList
 
 proc printWindowList(windows: seq[WindowInfo]) =
   echo "Available windows:"
   for i, win in windows:
-    let hwndHex = cast[int](win.hwnd).toHex.upper()
+    let hwndHex = cast[int](win.hwnd).toHex.toUpperAscii()
     echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}]"
 
 proc toggleHighlight(rect: RECT) =
@@ -251,7 +252,7 @@ proc pickWindow*(): Option[WindowInfo] =
     if input.len == 1 and (input[0] == 'q' or input[0] == 'Q' or input[0] == 'x' or
         input[0] == 'X'):
       return
-    if input.isDigit:
+    if input.allCharsInSet(Digits):
       let idx = parseInt(input) - 1
       if idx >= 0 and idx < windows.len:
         return some(windows[idx])
@@ -261,4 +262,4 @@ when isMainModule:
   let selection = pickWindow()
   if selection.isSome:
     let win = selection.get()
-    echo &"Selected: {win.title} ({win.processName}) [HWND=0x{cast[int](win.hwnd).toHex.upper()}]"
+    echo &"Selected: {win.title} ({win.processName}) [HWND=0x{cast[int](win.hwnd).toHex.toUpperAscii()}]"
