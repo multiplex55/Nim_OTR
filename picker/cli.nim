@@ -11,8 +11,8 @@ proc printWindowList(windows: seq[WindowInfo]) =
     echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}]"
 
 ## Interactive selection entry point that returns a chosen window, if any.
-proc pickWindow*(): Option[WindowInfo] =
-  var windows = enumTopLevelWindows()
+proc pickWindow*(opts: WindowEligibilityOptions = defaultEligibilityOptions()): Option[WindowInfo] =
+  var windows = enumTopLevelWindows(opts)
   if windows.len == 0:
     echo "No eligible windows found."
     return
@@ -27,7 +27,7 @@ proc pickWindow*(): Option[WindowInfo] =
       continue
     if input.len == 1 and (input[0] == 'c' or input[0] == 'C'):
       echo "Click-to-pick: hover a window and click or press Enter to select. Press Esc to cancel."
-      let selection = clickToPickWindow()
+      let selection = clickToPickWindow(opts)
       if selection.isNone:
         echo "Selection cancelled."
         return

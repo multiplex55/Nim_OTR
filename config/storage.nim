@@ -24,6 +24,7 @@ type
     targetHwnd*: int
     targetTitle*: string
     targetProcess*: string
+    includeCloaked*: bool
 
 proc readIntField(data: JsonNode; key: string; dest: var int) =
   let node = data.getOrDefault(key)
@@ -57,7 +58,8 @@ proc defaultOverlayConfig*(): OverlayConfig =
     opacity: 255,
     targetHwnd: 0,
     targetTitle: "",
-    targetProcess: ""
+    targetProcess: "",
+    includeCloaked: false
   )
 
 ## Path to the overlay configuration file, creating the config directory if needed.
@@ -89,6 +91,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       readIntField(data, "targetHwnd", result.targetHwnd)
       readStringField(data, "targetTitle", result.targetTitle)
       readStringField(data, "targetProcess", result.targetProcess)
+      readBoolField(data, "includeCloaked", result.includeCloaked)
       return
     except CatchableError:
       discard
@@ -111,7 +114,8 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "opacity": cfg.opacity,
     "targetHwnd": cfg.targetHwnd,
     "targetTitle": cfg.targetTitle,
-    "targetProcess": cfg.targetProcess
+    "targetProcess": cfg.targetProcess,
+    "includeCloaked": cfg.includeCloaked
   }
   writeFile(configPath(), node.pretty())
 
