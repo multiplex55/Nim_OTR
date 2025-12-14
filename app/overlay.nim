@@ -182,6 +182,7 @@ type
     hwnd: HWND
     title: string
     processName: string
+    processPath: string
 
   AppState = object
     cfg: OverlayConfig
@@ -311,50 +312,82 @@ proc windowTitle(hwnd: HWND): string =
   discard GetWindowTextW(hwnd, buf, length + 1)
   $buf
 
-proc windowProcessName(hwnd: HWND): string =
+proc windowProcessIdentity(hwnd: HWND): tuple[name: string, path: string] =
   var pid: DWORD
   discard GetWindowThreadProcessId(hwnd, addr pid)
   if pid == 0:
-    return ""
+    return ("", "")
 
   let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
   if handle == 0:
-    return ""
+    return ("", "")
 
   var size = 260.DWORD
   var buffer = newWideCString(int(size))
   if QueryFullProcessImageNameW(handle, 0, buffer, addr size) != 0:
     let path = $buffer
-    result = splitFile(path).name
+    result = (splitFile(path).name, path)
+  else:
+    result = ("", "")
   discard CloseHandle(handle)
+
+proc windowProcessName(hwnd: HWND): string =
+  windowProcessIdentity(hwnd).name
+
+proc windowProcessPath(hwnd: HWND): string =
+  windowProcessIdentity(hwnd).path
 
 proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
   WindowIdentity(
     hwnd: hwnd,
     title: windowTitle(hwnd),
-    processName: windowProcessName(hwnd)
+    processName: windowProcessName(hwnd),
+    processPath: windowProcessPath(hwnd)
   )
 
-proc matchesStoredWindow(win: core.WindowInfo; cfg: OverlayConfig): bool =
-  let processMatches = cfg.targetProcess.len > 0 and
-      cmpIgnoreCase(win.processName, cfg.targetProcess) == 0
-  let titleMatches = cfg.targetTitle.len > 0 and win.title == cfg.targetTitle
+proc processMatches(cfg: OverlayConfig; winProcess: string; winPath: string): bool =
+  if cfg.targetProcessPath.len > 0:
+    return cmpIgnoreCase(winPath, cfg.targetProcessPath) == 0
+  if cfg.targetProcess.len > 0:
+    return cmpIgnoreCase(winProcess, cfg.targetProcess) == 0
+  false
 
-  if cfg.targetProcess.len > 0 and cfg.targetTitle.len > 0:
-    processMatches and titleMatches
-  elif cfg.targetProcess.len > 0:
-    processMatches
-  else:
-    titleMatches
+proc fullIdentityMatches(win: core.WindowInfo; cfg: OverlayConfig): bool =
+  cfg.targetTitle.len > 0 and win.title == cfg.targetTitle and
+      processMatches(cfg, win.processName, win.processPath)
 
-proc findWindowByIdentity*(cfg: OverlayConfig; opts: WindowEligibilityOptions): HWND =
-  if cfg.targetTitle.len == 0 and cfg.targetProcess.len == 0:
-    return 0
+proc findWindowByIdentity*(cfg: OverlayConfig; opts: WindowEligibilityOptions): Option[HWND] =
+  if cfg.targetTitle.len == 0 and cfg.targetProcess.len == 0 and cfg.targetProcessPath.len == 0:
+    return
 
+  var processMatchesOnly: seq[HWND] = @[]
   for win in enumTopLevelWindows(opts):
-    if matchesStoredWindow(win, cfg):
-      return win.hwnd
-  0
+    if fullIdentityMatches(win, cfg):
+      return some(win.hwnd)
+
+    if processMatches(cfg, win.processName, win.processPath):
+      processMatchesOnly.add(win.hwnd)
+
+  if processMatchesOnly.len == 1:
+    return some(processMatchesOnly[0])
+
+proc validateStoredHandle(cfg: OverlayConfig; opts: WindowEligibilityOptions): Option[HWND] =
+  let stored = HWND(cfg.targetHwnd)
+  if stored == 0 or IsWindow(stored) == 0:
+    return
+
+  if not shouldIncludeWindow(stored, opts):
+    if not shouldIncludeWindow(stored, opts, false):
+      return
+
+  let identity = collectWindowIdentity(stored)
+  if not processMatches(cfg, identity.processName, identity.processPath):
+    return
+
+  if cfg.targetTitle.len > 0 and identity.title != cfg.targetTitle:
+    return
+
+  some(stored)
 
 proc restoreAndFocusTarget() =
   let target = appState.targetHwnd
@@ -597,6 +630,7 @@ proc registerThumbnail(target: HWND) =
     appState.cfg.targetHwnd = cast[int](identity.hwnd)
     appState.cfg.targetTitle = identity.title
     appState.cfg.targetProcess = identity.processName
+    appState.cfg.targetProcessPath = identity.processPath
     if not appState.hasCrop:
       applySavedCrop(target)
     updateThumbnailProperties()
@@ -832,6 +866,7 @@ proc setTargetWindow*(target: HWND) =
       appState.cfg.targetHwnd = cast[int](identity.hwnd)
       appState.cfg.targetTitle = identity.title
       appState.cfg.targetProcess = identity.processName
+      appState.cfg.targetProcessPath = identity.processPath
     updateStatusText()
     updateCropDialogFields()
 
