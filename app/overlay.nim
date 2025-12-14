@@ -255,7 +255,7 @@ proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
     processName: windowProcessName(hwnd)
   )
 
-proc matchesStoredWindow(win: WindowInfo; cfg: OverlayConfig): bool =
+proc matchesStoredWindow(win: core.WindowInfo; cfg: OverlayConfig): bool =
   let processMatches = cfg.targetProcess.len > 0 and
       cmpIgnoreCase(win.processName, cfg.targetProcess) == 0
   let titleMatches = cfg.targetTitle.len > 0 and win.title == cfg.targetTitle
