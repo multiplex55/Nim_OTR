@@ -7,10 +7,10 @@ type IntRect* = object
   right*: int
   bottom*: int
 
-proc width(rect: IntRect): int =
+proc width*(rect: IntRect): int =
   rect.right - rect.left
 
-proc height(rect: IntRect): int =
+proc height*(rect: IntRect): int =
   rect.bottom - rect.top
 
 ## Clamps `rect` to stay within the provided `bounds` rectangle.

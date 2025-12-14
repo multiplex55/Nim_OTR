@@ -92,6 +92,11 @@ proc loadOverlayConfig*(): OverlayConfig =
       readStringField(data, "targetTitle", result.targetTitle)
       readStringField(data, "targetProcess", result.targetProcess)
       readBoolField(data, "includeCloaked", result.includeCloaked)
+      if result.cropActive and (result.cropWidth <= 0 or result.cropHeight <= 0):
+        ## Prevent restoring a zero-area active crop on launch.
+        result.cropActive = false
+        result.cropWidth = 0
+        result.cropHeight = 0
       return
     except CatchableError:
       discard
