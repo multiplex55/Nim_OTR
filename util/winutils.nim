@@ -1,4 +1,5 @@
 import std/[os, widestrs]
+import winim/lean
 import ../win/[user32, kernel32, dwmapi]
 
 ## Shared helpers for reading window metadata and visibility characteristics.

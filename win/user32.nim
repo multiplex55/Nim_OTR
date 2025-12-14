@@ -130,9 +130,3 @@ when not declared(ReleaseDC):
   proc ReleaseDC*(hWnd: HWND; hDC: HDC): int32 {.stdcall, dynlib: "user32",
       importc.}
 
-const
-  GA_ROOT* = 2
-  GA_ROOTOWNER* = 3
-  GW_OWNER* = 4
-  WS_EX_TOOLWINDOW* = 0x00000080
-  GWL_EXSTYLE* = -20
