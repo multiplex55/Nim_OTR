@@ -636,44 +636,44 @@ proc setControlFont(handle: HWND) =
 proc initCropDialogControls(hwnd: HWND) =
   appState.cropDialog.hwnd = hwnd
 
-    let labelX: int32 = 16
-    let editX: int32 = 90
-    let editWidth: int32 = 150
-    let rowHeight: int32 = 32
+  let labelX: int32 = 16
+  let editX: int32 = 90
+  let editWidth: int32 = 150
+  let rowHeight: int32 = 32
 
   let labels = ["X:", "Y:", "Width:", "Height:"]
   let editIds = [idCropLeft, idCropTop, idCropWidth, idCropHeight]
 
-    var y: int32 = 16
+  var y: int32 = 16
   for i, label in labels:
-      discard CreateWindowExW(
-        0,
-        L"STATIC",
-        label.newWideCString,
-        WS_CHILD or WS_VISIBLE,
-        labelX,
-        y,
-        60,
-        20,
-        hwnd,
-        0,
-        appState.hInstance,
-        nil
-      )
+    discard CreateWindowExW(
+      0,
+      L"STATIC",
+      label.newWideCString,
+      WS_CHILD or WS_VISIBLE,
+      labelX,
+      y,
+      60,
+      20,
+      hwnd,
+      0,
+      appState.hInstance,
+      nil
+    )
 
-      let edit = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        nil,
-        WS_CHILD or WS_VISIBLE or WS_TABSTOP or ES_NUMBER,
-        editX,
-        y - 4,
-        editWidth,
-        24,
-        hwnd,
-        cast[HMENU](editIds[i]),
-        appState.hInstance,
-        nil
+    let edit = CreateWindowExW(
+      WS_EX_CLIENTEDGE,
+      L"EDIT",
+      nil,
+      WS_CHILD or WS_VISIBLE or WS_TABSTOP or ES_NUMBER,
+      editX,
+      y - 4,
+      editWidth,
+      24,
+      hwnd,
+      cast[HMENU](editIds[i]),
+      appState.hInstance,
+      nil
     )
 
     case editIds[i]
@@ -792,27 +792,27 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
     discard
   result = DefWindowProcW(hwnd, msg, wParam, lParam)
 
-  proc showCropDialog() =
-    if not registerCropDialogClass():
-      return
+proc showCropDialog() =
+  if not registerCropDialogClass():
+    return
 
-    if appState.cropDialog.hwnd != 0:
-      discard SetForegroundWindow(appState.cropDialog.hwnd)
-      updateCropDialogFields()
-      return
+  if appState.cropDialog.hwnd != 0:
+    discard SetForegroundWindow(appState.cropDialog.hwnd)
+    updateCropDialogFields()
+    return
 
-    let hwnd = CreateWindowExW(
-      WS_EX_TOOLWINDOW,
-      cropDialogClass,
-      L"Crop",
-      WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
-      CW_USEDEFAULT,
-      CW_USEDEFAULT,
-      int32(cropDialogWidth),
-      int32(cropDialogHeight),
-      appState.hwnd,
-      0,
-      appState.hInstance,
+  let hwnd = CreateWindowExW(
+    WS_EX_TOOLWINDOW,
+    cropDialogClass,
+    L"Crop",
+    WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
+    CW_USEDEFAULT,
+    CW_USEDEFAULT,
+    int32(cropDialogWidth),
+    int32(cropDialogHeight),
+    appState.hwnd,
+    0,
+    appState.hInstance,
     nil
   )
 
