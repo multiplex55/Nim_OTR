@@ -228,6 +228,13 @@ proc clickToPick(): HWND =
 
     Sleep(50)
 
+## Click-to-pick helper that returns a chosen window without prompting via stdin.
+proc clickToPickWindow*(): Option[WindowInfo] =
+  let hwnd = clickToPick()
+  if hwnd == 0:
+    return
+  some(collectWindowInfo(hwnd))
+
 ## Interactive selection entry point that returns a chosen window, if any.
 proc pickWindow*(): Option[WindowInfo] =
   var windows = enumTopLevelWindows()
@@ -244,11 +251,11 @@ proc pickWindow*(): Option[WindowInfo] =
       echo "Please enter a selection."
       continue
     if input.len == 1 and (input[0] == 'c' or input[0] == 'C'):
-      let hwnd = clickToPick()
-      if hwnd == 0:
+      let selection = clickToPickWindow()
+      if selection.isNone:
         echo "Selection cancelled."
         return
-      return some(collectWindowInfo(hwnd))
+      return selection
     if input.len == 1 and (input[0] == 'q' or input[0] == 'Q' or input[0] == 'x' or
         input[0] == 'X'):
       return
