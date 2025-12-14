@@ -246,7 +246,7 @@ proc matchesStoredWindow(win: WindowIdentity; cfg: OverlayConfig): bool =
   else:
     titleMatches
 
-proc findWindowByIdentity(cfg: OverlayConfig): HWND =
+proc findWindowByIdentity*(cfg: OverlayConfig): HWND =
   if cfg.targetTitle.len == 0 and cfg.targetProcess.len == 0:
     return 0
 
@@ -646,26 +646,26 @@ proc createWindow(hInstance: HINSTANCE): HWND =
     nil
   )
 
-proc run() =
-  appState.cfg = loadOverlayConfig()
+proc initOverlay*(cfg: OverlayConfig): bool =
+  appState.cfg = cfg
   let storedOpacity = max(min(appState.cfg.opacity, 255), 0)
   appState.opacity = BYTE(storedOpacity)
   appState.hInstance = GetModuleHandleW(nil)
   appState.hwnd = createWindow(appState.hInstance)
   if appState.hwnd == 0:
-    return
+    return false
 
   applyStyle(appState.hwnd)
   applyTopMost(appState.hwnd)
 
-  let storedTarget = HWND(appState.cfg.targetHwnd)
-  if storedTarget != 0 and IsWindow(storedTarget) != 0:
-    registerThumbnail(storedTarget)
-  elif appState.targetHwnd == 0:
-    registerThumbnail(findWindowByIdentity(appState.cfg))
-
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
+
+  result = true
+
+proc runOverlayLoop*() =
+  if appState.hwnd == 0:
+    return
 
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
@@ -673,6 +673,3 @@ proc run() =
     discard DispatchMessageW(addr msg)
 
   saveStateOnClose()
-
-when isMainModule:
-  run()
