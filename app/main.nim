@@ -9,13 +9,13 @@ import overlay
 
 proc selectInitialTarget(cfg: var OverlayConfig): HWND =
   let opts = eligibilityOptions(cfg)
-  let storedHandle = HWND(cfg.targetHwnd)
-  if storedHandle != 0 and IsWindow(storedHandle) != 0:
-    return storedHandle
+  let matchedIdentity = findWindowByIdentity(cfg, opts)
+  if matchedIdentity.isSome:
+    return matchedIdentity.get()
 
-  let matched = findWindowByIdentity(cfg, opts)
-  if matched != 0:
-    return matched
+  let storedHandle = validateStoredHandle(cfg, opts)
+  if storedHandle.isSome:
+    return storedHandle.get()
 
   let selection = pickWindow(opts)
   if selection.isSome:
@@ -23,11 +23,13 @@ proc selectInitialTarget(cfg: var OverlayConfig): HWND =
     cfg.targetHwnd = cast[int](win.hwnd)
     cfg.targetTitle = win.title
     cfg.targetProcess = win.processName
+    cfg.targetProcessPath = win.processPath
     return win.hwnd
 
   cfg.targetHwnd = 0
   cfg.targetTitle.setLen(0)
   cfg.targetProcess.setLen(0)
+  cfg.targetProcessPath.setLen(0)
   0
 
 when isMainModule:

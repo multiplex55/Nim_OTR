@@ -113,6 +113,7 @@ type
     hwnd*: HWND
     title*: string
     processName*: string
+    processPath*: string
 
   WindowEligibilityOptions* = object
     includeCloaked*: bool
@@ -149,30 +150,32 @@ proc rootWindow(hwnd: HWND): HWND =
 proc rootOwnerWindow(hwnd: HWND): HWND =
   GetAncestor(hwnd, GA_ROOTOWNER)
 
-proc processName(hwnd: HWND): string =
+proc processIdentity*(hwnd: HWND): tuple[name: string, path: string] =
   var pid: DWORD
   discard GetWindowThreadProcessId(hwnd, addr pid)
   if pid == 0:
-    return "<unknown>"
+    return ("<unknown>", "")
 
   let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
   if handle == 0:
-    return "<unknown>"
+    return ("<unknown>", "")
 
   var size = 260.DWORD
   var buffer = newWideCString(int(size))
   if QueryFullProcessImageNameW(handle, 0, buffer, addr size) != 0:
     let path = $buffer
-    result = splitFile(path).name
+    result = (splitFile(path).name, path)
   else:
-    result = "<unknown>"
+    result = ("<unknown>", "")
   discard CloseHandle(handle)
 
 proc collectWindowInfo(hwnd: HWND): WindowInfo =
+  let procInfo = processIdentity(hwnd)
   WindowInfo(
     hwnd: hwnd,
     title: getWindowTitle(hwnd),
-    processName: processName(hwnd)
+    processName: procInfo.name,
+    processPath: procInfo.path
   )
 
 proc hasShellOwner(hwnd: HWND): bool =

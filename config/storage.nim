@@ -24,6 +24,7 @@ type
     targetHwnd*: int
     targetTitle*: string
     targetProcess*: string
+    targetProcessPath*: string
     includeCloaked*: bool
 
 proc readIntField(data: JsonNode; key: string; dest: var int) =
@@ -59,6 +60,7 @@ proc defaultOverlayConfig*(): OverlayConfig =
     targetHwnd: 0,
     targetTitle: "",
     targetProcess: "",
+    targetProcessPath: "",
     includeCloaked: false
   )
 
@@ -91,6 +93,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       readIntField(data, "targetHwnd", result.targetHwnd)
       readStringField(data, "targetTitle", result.targetTitle)
       readStringField(data, "targetProcess", result.targetProcess)
+      readStringField(data, "targetProcessPath", result.targetProcessPath)
       readBoolField(data, "includeCloaked", result.includeCloaked)
       if result.cropActive and (result.cropWidth <= 0 or result.cropHeight <= 0):
         ## Prevent restoring a zero-area active crop on launch.
@@ -120,6 +123,7 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "targetHwnd": cfg.targetHwnd,
     "targetTitle": cfg.targetTitle,
     "targetProcess": cfg.targetProcess,
+    "targetProcessPath": cfg.targetProcessPath,
     "includeCloaked": cfg.includeCloaked
   }
   writeFile(configPath(), node.pretty())
