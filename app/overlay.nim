@@ -122,6 +122,7 @@ const
 
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
+  exStyleLayered = WS_EX_LAYERED
   DWM_TNP_RECTDESTINATION = 0x1
   DWM_TNP_RECTSOURCE = 0x2
   DWM_TNP_OPACITY = 0x4
@@ -324,7 +325,15 @@ proc destroyContextMenu() =
   discard DestroyMenu(appState.contextMenu)
   appState.contextMenu = 0
 
-proc applyTopMost(hwnd: HWND) =
+proc currentStyle(): DWORD =
+  if appState.cfg.borderless: styleBorderless else: styleStandard
+
+proc applyWindowStyles(hwnd: HWND) =
+  let style = currentStyle()
+  discard SetWindowLongPtrW(hwnd, GWL_STYLE, style)
+  let currentEx = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
+  discard SetWindowLongPtrW(hwnd, GWL_EXSTYLE, LONG_PTR(currentEx or exStyleLayered))
+
   let insertAfter = if appState.cfg.topMost: HWND_TOPMOST else: HWND_NOTOPMOST
   discard SetWindowPos(
     hwnd,
@@ -333,23 +342,7 @@ proc applyTopMost(hwnd: HWND) =
     0,
     0,
     0,
-    SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE
-  )
-
-proc currentStyle(): DWORD =
-  if appState.cfg.borderless: styleBorderless else: styleStandard
-
-proc applyStyle(hwnd: HWND) =
-  let style = currentStyle()
-  discard SetWindowLongPtrW(hwnd, GWL_STYLE, style)
-  discard SetWindowPos(
-    hwnd,
-    HWND_TOP,
-    0,
-    0,
-    0,
-    0,
-    SWP_NOMOVE or SWP_NOSIZE or SWP_FRAMECHANGED or SWP_NOACTIVATE or SWP_NOZORDER
+    SWP_NOMOVE or SWP_NOSIZE or SWP_FRAMECHANGED or SWP_NOACTIVATE
   )
 
 proc handleSize(lParam: LPARAM) =
@@ -386,6 +379,11 @@ proc updateThumbnailProperties() =
   props.fVisible = (if appState.thumbnailVisible and not appState.thumbnailSuppressed: 1 else: 0)
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
+
+proc applyWindowOpacity() =
+  if appState.hwnd == 0:
+    return
+  discard SetLayeredWindowAttributes(appState.hwnd, 0, appState.opacity, LWA_ALPHA)
 
 proc thumbnailHandleValid(): bool =
   if appState.thumbnail == 0:
@@ -566,6 +564,7 @@ proc setOpacity*(value: BYTE) =
   appState.opacity = value
   appState.cfg.opacity = int(value)
   updateThumbnailProperties()
+  applyWindowOpacity()
 
 ## Toggles thumbnail visibility on the overlay window.
 proc setThumbnailVisible*(visible: bool) =
@@ -613,10 +612,10 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     selectTarget()
   of idToggleTopMost:
     appState.cfg.topMost = not appState.cfg.topMost
-    applyTopMost(hwnd)
+    applyWindowStyles(hwnd)
   of idToggleBorderless:
     appState.cfg.borderless = not appState.cfg.borderless
-    applyStyle(hwnd)
+    applyWindowStyles(hwnd)
   of idExit:
     discard PostMessageW(hwnd, WM_CLOSE, 0, 0)
   else:
@@ -720,7 +719,7 @@ proc createWindow(hInstance: HINSTANCE): HWND =
   let ypos = if useDefault: CW_USEDEFAULT else: int32(appState.cfg.y)
 
   result = CreateWindowExW(
-    0,
+    exStyleLayered,
     className,
     overlayTitle,
     currentStyle(),
@@ -743,8 +742,8 @@ proc initOverlay*(cfg: OverlayConfig): bool =
   if appState.hwnd == 0:
     return false
 
-  applyStyle(appState.hwnd)
-  applyTopMost(appState.hwnd)
+  applyWindowStyles(appState.hwnd)
+  applyWindowOpacity()
   registerHotkeys()
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
