@@ -106,6 +106,7 @@ proc updateThumbnailProperties()
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
+proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT
 
 const
   className = L"NimOTROverlayClass"
@@ -113,7 +114,16 @@ const
   idSelectWindow = 1000
   idToggleTopMost = 1001
   idToggleBorderless = 1002
-  idExit = 1003
+  idEditCrop = 1003
+  idResetCrop = 1004
+  idExit = 1005
+
+  idCropLeft = 2001
+  idCropTop = 2002
+  idCropWidth = 2003
+  idCropHeight = 2004
+  idCropApply = 2005
+  idCropResetButton = 2006
 
   menuTopFlags = MF_STRING
   menuChecked = MF_CHECKED
@@ -149,9 +159,22 @@ let
   menuLabelSelectWindow = L"Select Window… (Ctrl+Shift+P)"
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
+  menuLabelCrop = L"Crop…"
+  menuLabelResetCrop = L"Reset Crop"
   menuLabelExit = L"Exit"
 
+  cropDialogClass = L"NimOTRCropDialog"
+  cropDialogWidth = 280
+  cropDialogHeight = 210
+
 type
+  CropDialogState = object
+    hwnd: HWND
+    editLeft: HWND
+    editTop: HWND
+    editWidth: HWND
+    editHeight: HWND
+
   WindowIdentity = object
     hwnd: HWND
     title: string
@@ -171,6 +194,7 @@ type
     promptedForReselect: bool
     validationTimerRunning: bool
     contextMenu: HMENU
+    cropDialog: CropDialogState
     clickThroughEnabled: bool
     selectingTarget: bool
     statusText: string
@@ -204,11 +228,21 @@ proc toWinRect(rect: IntRect): RECT =
   )
 
 proc saveCropToConfig(rect: RECT; active: bool) =
+  let width = (rect.right - rect.left).int
+  let height = (rect.bottom - rect.top).int
+  if width <= 0 or height <= 0:
+    appState.cfg.cropActive = false
+    appState.cfg.cropLeft = 0
+    appState.cfg.cropTop = 0
+    appState.cfg.cropWidth = 0
+    appState.cfg.cropHeight = 0
+    return
+
   appState.cfg.cropActive = active
   appState.cfg.cropLeft = rect.left.int
   appState.cfg.cropTop = rect.top.int
-  appState.cfg.cropWidth = (rect.right - rect.left).int
-  appState.cfg.cropHeight = (rect.bottom - rect.top).int
+  appState.cfg.cropWidth = width
+  appState.cfg.cropHeight = height
 
 proc configCropRect(cfg: OverlayConfig): RECT =
   RECT(
@@ -217,6 +251,47 @@ proc configCropRect(cfg: OverlayConfig): RECT =
     right: LONG(cfg.cropLeft + cfg.cropWidth),
     bottom: LONG(cfg.cropTop + cfg.cropHeight)
   )
+
+proc currentCropRect(): RECT =
+  if appState.targetHwnd == 0:
+    RECT()
+  elif appState.hasCrop:
+    appState.cropRect
+  else:
+    clientRect(appState.targetHwnd)
+
+proc setEditText(handle: HWND; value: int) =
+  if handle != 0:
+    discard SetWindowTextW(handle, ($value).newWideCString)
+
+proc readEditInt(handle: HWND): Option[int] =
+  if handle == 0:
+    return
+
+  let length = GetWindowTextLengthW(handle)
+  if length == 0:
+    return none(int)
+
+  var buffer = newWideCString(length + 1)
+  discard GetWindowTextW(handle, buffer, length + 1)
+
+  try:
+    some(parseInt($buffer))
+  except ValueError:
+    none(int)
+
+proc updateCropDialogFields() =
+  if appState.cropDialog.hwnd == 0:
+    return
+
+  let rect = currentCropRect()
+  let width = (rect.right - rect.left).int
+  let height = (rect.bottom - rect.top).int
+
+  setEditText(appState.cropDialog.editLeft, rect.left.int)
+  setEditText(appState.cropDialog.editTop, rect.top.int)
+  setEditText(appState.cropDialog.editWidth, width)
+  setEditText(appState.cropDialog.editHeight, height)
 
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
@@ -305,6 +380,10 @@ proc createContextMenu() =
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
   discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
+
+  discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
+  discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
+  discard AppendMenuW(menu, menuTopFlags, idResetCrop, menuLabelResetCrop)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idExit, menuLabelExit)
@@ -452,6 +531,7 @@ proc detachTarget(promptUser: bool) =
   if promptUser:
     promptForReselect()
   updateStatusText()
+  updateCropDialogFields()
 
 proc validateTargetState() =
   let target = appState.targetHwnd
@@ -489,10 +569,16 @@ proc applySavedCrop(target: HWND) =
   let sourceRect = clientRect(target)
   if not appState.cfg.cropActive:
     setDefaultCrop(target)
+    updateCropDialogFields()
     return
   let rectFromConfig = configCropRect(appState.cfg)
-  appState.cropRect = clampRect(rectFromConfig.toIntRect, sourceRect.toIntRect).toWinRect
-  appState.hasCrop = true
+  let clamped = clampRect(rectFromConfig.toIntRect, sourceRect.toIntRect)
+  if clamped.width == 0 or clamped.height == 0:
+    setDefaultCrop(target)
+  else:
+    appState.cropRect = clamped.toWinRect
+    appState.hasCrop = true
+  updateCropDialogFields()
 
 proc registerThumbnail(target: HWND) =
   unregisterThumbnail()
@@ -521,6 +607,216 @@ proc mapOverlayToSource(overlayRect: RECT): RECT =
   let sourceRect = clientRect(appState.targetHwnd).toIntRect
   mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
 
+var cropDialogClassRegistered = false
+
+proc registerCropDialogClass(): bool =
+  if cropDialogClassRegistered:
+    return true
+
+  var wc: WNDCLASSEXW
+  wc.cbSize = sizeof(WNDCLASSEXW).UINT
+  wc.style = CS_HREDRAW or CS_VREDRAW
+  wc.lpfnWndProc = cropDialogWndProc
+  wc.hInstance = appState.hInstance
+  wc.hCursor = LoadCursorW(0, IDC_ARROW)
+  wc.hbrBackground = cast[HBRUSH](COLOR_WINDOW + 1)
+  wc.lpszClassName = cropDialogClass
+
+  cropDialogClassRegistered = RegisterClassExW(wc) != 0
+  cropDialogClassRegistered
+
+proc setControlFont(handle: HWND) =
+  if handle != 0:
+    let font = GetStockObject(DEFAULT_GUI_FONT)
+    discard SendMessageW(handle, WM_SETFONT, WPARAM(font), LPARAM(1))
+
+proc initCropDialogControls(hwnd: HWND) =
+  appState.cropDialog.hwnd = hwnd
+
+  let labelX = 16
+  let editX = 90
+  let editWidth = 150
+  let rowHeight = 32
+
+  let labels = ["X:", "Y:", "Width:", "Height:"]
+  let editIds = [idCropLeft, idCropTop, idCropWidth, idCropHeight]
+
+  var y = 16
+  for i, label in labels:
+    discard CreateWindowExW(
+      0,
+      L"STATIC",
+      label.newWideCString,
+      WS_CHILD or WS_VISIBLE,
+      labelX,
+      y,
+      60,
+      20,
+      hwnd,
+      0,
+      appState.hInstance,
+      nil
+    )
+
+    let edit = CreateWindowExW(
+      WS_EX_CLIENTEDGE,
+      L"EDIT",
+      nil,
+      WS_CHILD or WS_VISIBLE or WS_TABSTOP or ES_NUMBER,
+      editX,
+      y - 4,
+      editWidth,
+      24,
+      hwnd,
+      cast[HMENU](editIds[i]),
+      appState.hInstance,
+      nil
+    )
+
+    case editIds[i]
+    of idCropLeft:
+      appState.cropDialog.editLeft = edit
+    of idCropTop:
+      appState.cropDialog.editTop = edit
+    of idCropWidth:
+      appState.cropDialog.editWidth = edit
+    else:
+      appState.cropDialog.editHeight = edit
+
+    y += rowHeight
+  setControlFont(appState.cropDialog.editLeft)
+  setControlFont(appState.cropDialog.editTop)
+  setControlFont(appState.cropDialog.editWidth)
+  setControlFont(appState.cropDialog.editHeight)
+
+  let applyBtn = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"Apply",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP,
+    labelX,
+    y + 8,
+    100,
+    28,
+    hwnd,
+    cast[HMENU](idCropApply),
+    appState.hInstance,
+    nil
+  )
+  setControlFont(applyBtn)
+
+  let resetBtn = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"Reset",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP,
+    editX,
+    y + 8,
+    100,
+    28,
+    hwnd,
+    cast[HMENU](idCropResetButton),
+    appState.hInstance,
+    nil
+  )
+  setControlFont(resetBtn)
+
+proc showCropValidation(message: string) =
+  discard MessageBoxW(
+    if appState.cropDialog.hwnd != 0: appState.cropDialog.hwnd else: appState.hwnd,
+    message.newWideCString,
+    L"Crop",
+    MB_OK or MB_ICONINFORMATION
+  )
+
+proc applyCropFromDialog() =
+  if appState.targetHwnd == 0:
+    showCropValidation("Select a window before applying a crop.")
+    return
+
+  let left = readEditInt(appState.cropDialog.editLeft)
+  let top = readEditInt(appState.cropDialog.editTop)
+  let width = readEditInt(appState.cropDialog.editWidth)
+  let height = readEditInt(appState.cropDialog.editHeight)
+
+  if left.isNone or top.isNone or width.isNone or height.isNone:
+    showCropValidation("Enter numeric values for all crop fields.")
+    return
+
+  if width.get <= 0 or height.get <= 0:
+    showCropValidation("Width and height must be greater than zero.")
+    return
+
+  let rect = RECT(
+    left: LONG(left.get),
+    top: LONG(top.get),
+    right: LONG(left.get + width.get),
+    bottom: LONG(top.get + height.get)
+  )
+  setCrop(rect)
+  updateCropDialogFields()
+
+proc resetCropFromDialog() =
+  if appState.targetHwnd == 0:
+    showCropValidation("Select a window before resetting the crop.")
+    return
+  resetCrop()
+  updateCropDialogFields()
+
+proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
+  case msg
+  of WM_CREATE:
+    initCropDialogControls(hwnd)
+    updateCropDialogFields()
+    return 0
+  of WM_COMMAND:
+    case loWord(wParam)
+    of idCropApply:
+      applyCropFromDialog()
+    of idCropResetButton:
+      resetCropFromDialog()
+    else:
+      discard
+    return 0
+  of WM_CLOSE:
+    discard DestroyWindow(hwnd)
+    return 0
+  of WM_DESTROY:
+    if appState.cropDialog.hwnd == hwnd:
+      appState.cropDialog = CropDialogState()
+    return 0
+  else:
+    discard
+  result = DefWindowProcW(hwnd, msg, wParam, lParam)
+
+proc showCropDialog() =
+  if not registerCropDialogClass():
+    return
+
+  if appState.cropDialog.hwnd != 0:
+    discard SetForegroundWindow(appState.cropDialog.hwnd)
+    updateCropDialogFields()
+    return
+
+  let hwnd = CreateWindowExW(
+    WS_EX_TOOLWINDOW,
+    cropDialogClass,
+    L"Crop",
+    WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
+    CW_USEDEFAULT,
+    CW_USEDEFAULT,
+    cropDialogWidth,
+    cropDialogHeight,
+    appState.hwnd,
+    0,
+    appState.hInstance,
+    nil
+  )
+
+  if hwnd != 0:
+    discard ShowWindow(hwnd, SW_SHOWNORMAL)
+    discard UpdateWindow(hwnd)
+
 ## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
   if target != appState.targetHwnd:
@@ -534,6 +830,7 @@ proc setTargetWindow*(target: HWND) =
       appState.cfg.targetTitle = identity.title
       appState.cfg.targetProcess = identity.processName
     updateStatusText()
+    updateCropDialogFields()
 
 ## Applies a crop rectangle using source window coordinates.
 proc setCrop*(rect: RECT) =
@@ -541,10 +838,15 @@ proc setCrop*(rect: RECT) =
     return
   let sourceRect = clientRect(appState.targetHwnd)
   let clamped = clampRect(rect.toIntRect, sourceRect.toIntRect)
+  if clamped.width == 0 or clamped.height == 0:
+    setDefaultCrop(appState.targetHwnd)
+    updateCropDialogFields()
+    return
   appState.cropRect = clamped.toWinRect
   appState.hasCrop = true
   saveCropToConfig(clamped.toWinRect, true)
   updateThumbnailProperties()
+  updateCropDialogFields()
 
 ## Maps an overlay client-area rectangle to the source window and applies the crop.
 proc setCropFromOverlayRect*(rect: RECT) =
@@ -558,6 +860,7 @@ proc resetCrop*() =
     return
   setDefaultCrop(appState.targetHwnd)
   updateThumbnailProperties()
+  updateCropDialogFields()
 
 ## Adjusts DWM thumbnail opacity for the overlay.
 proc setOpacity*(value: BYTE) =
@@ -616,6 +919,10 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idToggleBorderless:
     appState.cfg.borderless = not appState.cfg.borderless
     applyWindowStyles(hwnd)
+  of idEditCrop:
+    showCropDialog()
+  of idResetCrop:
+    resetCropFromDialog()
   of idExit:
     discard PostMessageW(hwnd, WM_CLOSE, 0, 0)
   else:
