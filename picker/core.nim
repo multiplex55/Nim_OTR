@@ -1,6 +1,6 @@
-## CLI helper that enumerates visible windows and lets users pick a target HWND.
+## Core picker utilities for enumerating and selecting windows without console I/O.
 
-import std/[options, os, strformat, strutils, widestrs]
+import std/[options, os, strutils, widestrs]
 import winim/lean
 
 when not declared(EnumWindows):
@@ -90,8 +90,8 @@ const
   PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   R2_NOT = 6
 
+## Captured window metadata for display and selection.
 type
-  ## Captured window metadata for display and selection.
   WindowInfo* = object
     hwnd*: HWND
     title*: string
@@ -144,7 +144,7 @@ proc collectWindowInfo(hwnd: HWND): WindowInfo =
     processName: processName(hwnd)
   )
 
-proc shouldInclude(hwnd: HWND): bool =
+proc isEligibleWindow*(hwnd: HWND): bool =
   if hwnd == 0:
     return false
   if IsWindowVisible(hwnd) == 0:
@@ -164,18 +164,12 @@ proc enumTopLevelWindows*(): seq[WindowInfo] =
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
     let listPtr = cast[ptr seq[WindowInfo]](lParam)
-    if shouldInclude(hwnd) and rootWindow(hwnd) == hwnd:
+    if isEligibleWindow(hwnd) and rootWindow(hwnd) == hwnd:
       listPtr[].add(collectWindowInfo(hwnd))
     1
 
   discard EnumWindows(callback, cast[LPARAM](addr resultList))
   result = resultList
-
-proc printWindowList(windows: seq[WindowInfo]) =
-  echo "Available windows:"
-  for i, win in windows:
-    let hwndHex = cast[int](win.hwnd).toHex.toUpperAscii()
-    echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}]"
 
 proc toggleHighlight(rect: RECT) =
   let hdc = GetDC(0)
@@ -191,15 +185,13 @@ proc currentHoveredWindow(): HWND =
   if GetCursorPos(addr pt) == 0:
     return 0
   let hwnd = rootWindow(WindowFromPoint(pt))
-  if shouldInclude(hwnd):
+  if isEligibleWindow(hwnd):
     hwnd else: 0
 
 proc keyJustPressed(vk: int32): bool =
   (GetAsyncKeyState(vk) and 0x8001) != 0
 
 proc clickToPick(): HWND =
-  echo "Click-to-pick: hover a window and click or press Enter to select. " &
-    "Press Esc to cancel."
   var lastRect: RECT
   var lastHwnd: HWND
 
@@ -234,39 +226,3 @@ proc clickToPickWindow*(): Option[WindowInfo] =
   if hwnd == 0:
     return
   some(collectWindowInfo(hwnd))
-
-## Interactive selection entry point that returns a chosen window, if any.
-proc pickWindow*(): Option[WindowInfo] =
-  var windows = enumTopLevelWindows()
-  if windows.len == 0:
-    echo "No eligible windows found."
-    return
-
-  printWindowList(windows)
-  echo "\nEnter number to pick, or 'c' for click-to-pick (Esc to cancel):"
-
-  while true:
-    let input = stdin.readLine().strip()
-    if input.len == 0:
-      echo "Please enter a selection."
-      continue
-    if input.len == 1 and (input[0] == 'c' or input[0] == 'C'):
-      let selection = clickToPickWindow()
-      if selection.isNone:
-        echo "Selection cancelled."
-        return
-      return selection
-    if input.len == 1 and (input[0] == 'q' or input[0] == 'Q' or input[0] == 'x' or
-        input[0] == 'X'):
-      return
-    if input.allCharsInSet(Digits):
-      let idx = parseInt(input) - 1
-      if idx >= 0 and idx < windows.len:
-        return some(windows[idx])
-    echo "Invalid selection. Enter a number or 'c' for click-to-pick."
-
-when isMainModule:
-  let selection = pickWindow()
-  if selection.isSome:
-    let win = selection.get()
-    echo &"Selected: {win.title} ({win.processName}) [HWND=0x{cast[int](win.hwnd).toHex.toUpperAscii()}]"

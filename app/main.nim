@@ -4,7 +4,7 @@ import std/options
 import winim/lean
 
 import ../config/storage
-import ../picker/main
+import ../picker/cli
 import overlay
 
 proc selectInitialTarget(cfg: var OverlayConfig): HWND =
