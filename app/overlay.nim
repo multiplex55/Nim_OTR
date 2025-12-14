@@ -1,7 +1,8 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[os, strutils, widestrs]
+import std/[options, os, strutils, widestrs]
 import winim/lean
 import ../util/geometry
+import ../picker/main
 
 when not declared(DWM_THUMBNAIL_PROPERTIES):
   type
@@ -27,6 +28,12 @@ when not declared(DestroyMenu):
 when not declared(CheckMenuItem):
   proc CheckMenuItem(hMenu: HMENU; uIDCheckItem: UINT; uCheck: UINT): DWORD {.
       stdcall, dynlib: "user32", importc.}
+when not declared(RegisterHotKey):
+  proc RegisterHotKey(hWnd: HWND; id: int32; fsModifiers: UINT; vk: UINT): WINBOOL
+      {.stdcall, dynlib: "user32", importc.}
+when not declared(UnregisterHotKey):
+  proc UnregisterHotKey(hWnd: HWND; id: int32): WINBOOL {.stdcall,
+      dynlib: "user32", importc.}
 when not declared(SetWindowLongPtrW):
   proc SetWindowLongPtrW(hWnd: HWND; nIndex: int32; dwNewLong: LONG_PTR): LONG_PTR
       {.stdcall, dynlib: "user32", importc.}
@@ -103,6 +110,7 @@ proc stopValidationTimer()
 const
   className = L"NimOTROverlayClass"
   overlayTitle = L"Nim OTR Overlay"
+  idSelectWindow = 1000
   idToggleTopMost = 1001
   idToggleBorderless = 1002
   idExit = 1003
@@ -127,12 +135,17 @@ const
   MB_OK = 0x0
   MB_ICONINFORMATION = 0x40
   PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+  hotkeySelectWindowId = 3001
+  MOD_CONTROL = 0x0002
+  MOD_SHIFT = 0x0004
+  VK_P = 0x50
   enableClickForwarding = false ## Future flag: forward shift-clicks to the source window.
 
 when not declared(WM_DPICHANGED):
   const WM_DPICHANGED = 0x02E0
 
 let
+  menuLabelSelectWindow = L"Select Window… (Ctrl+Shift+P)"
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelExit = L"Exit"
@@ -157,12 +170,18 @@ type
     promptedForReselect: bool
     validationTimerRunning: bool
     contextMenu: HMENU
+    clickThroughEnabled: bool
+    selectingTarget: bool
 
   SearchContext = object
     cfg: ptr OverlayConfig
     found: ptr HWND
 
-var appState: AppState = AppState(opacity: 255.BYTE, thumbnailVisible: true)
+var appState: AppState = AppState(
+  opacity: 255.BYTE,
+  thumbnailVisible: true,
+  clickThroughEnabled: true
+)
 
 proc toIntRect(rect: RECT): IntRect =
   IntRect(
@@ -292,6 +311,8 @@ proc createContextMenu() =
     return
 
   appState.contextMenu = menu
+  discard AppendMenuW(menu, menuTopFlags, idSelectWindow, menuLabelSelectWindow)
+  discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
   discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
 
@@ -529,8 +550,31 @@ proc handleDpiChanged(hwnd: HWND, lParam: LPARAM) =
     SWP_NOZORDER or SWP_NOACTIVATE
   )
 
+proc registerHotkeys() =
+  discard RegisterHotKey(appState.hwnd, hotkeySelectWindowId, MOD_CONTROL or MOD_SHIFT, VK_P)
+
+proc unregisterHotkeys() =
+  discard UnregisterHotKey(appState.hwnd, hotkeySelectWindowId)
+
+proc selectTarget() =
+  if appState.selectingTarget:
+    return
+  appState.selectingTarget = true
+  let previousClickThrough = appState.clickThroughEnabled
+  appState.clickThroughEnabled = false
+  defer:
+    appState.clickThroughEnabled = previousClickThrough
+    appState.selectingTarget = false
+
+  let selection = clickToPickWindow()
+  if selection.isSome:
+    let win = selection.get()
+    setTargetWindow(win.hwnd)
+
 proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   case loWord(wParam)
+  of idSelectWindow:
+    selectTarget()
   of idToggleTopMost:
     appState.cfg.topMost = not appState.cfg.topMost
     applyTopMost(hwnd)
@@ -589,11 +633,15 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_COMMAND:
     handleCommand(hwnd, wParam)
     return 0
+  of WM_HOTKEY:
+    if int32(wParam) == hotkeySelectWindowId:
+      selectTarget()
+      return 0
   of WM_CONTEXTMENU:
     handleContextMenu(hwnd, lParam)
     return 0
   of WM_NCHITTEST:
-    if not shiftHeld():
+    if appState.clickThroughEnabled and not shiftHeld():
       return HTTRANSPARENT
   of WM_LBUTTONDOWN:
     if shiftHeld():
@@ -606,6 +654,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_DESTROY:
     stopValidationTimer()
     unregisterThumbnail()
+    unregisterHotkeys()
     destroyContextMenu()
     saveStateOnClose()
     PostQuitMessage(0)
@@ -657,6 +706,7 @@ proc initOverlay*(cfg: OverlayConfig): bool =
 
   applyStyle(appState.hwnd)
   applyTopMost(appState.hwnd)
+  registerHotkeys()
 
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
