@@ -1,105 +1,10 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
 import std/[options, os, strutils, widestrs]
 import winim/lean
-import ../util/geometry
-import ../picker/core
-
-when not declared(DWM_THUMBNAIL_PROPERTIES):
-  type
-    DWM_THUMBNAIL_PROPERTIES {.pure.} = object
-      dwFlags: DWORD
-      rcDestination: RECT
-      rcSource: RECT
-      opacity: BYTE
-      fVisible: WINBOOL
-      fSourceClientAreaOnly: WINBOOL
-
-when not declared(CreatePopupMenu):
-  proc CreatePopupMenu(): HMENU {.stdcall, dynlib: "user32", importc.}
-when not declared(AppendMenuW):
-  proc AppendMenuW(hMenu: HMENU; uFlags: UINT; uIDNewItem: UINT_PTR;
-      lpNewItem: LPCWSTR): WINBOOL {.stdcall, dynlib: "user32", importc.}
-when not declared(TrackPopupMenu):
-  proc TrackPopupMenu(hMenu: HMENU; uFlags: UINT; x: int32; y: int32;
-      nReserved: int32; hWnd: HWND; prcRect: ptr RECT): int32 {.stdcall,
-      dynlib: "user32", importc.}
-when not declared(DestroyMenu):
-  proc DestroyMenu(hMenu: HMENU): WINBOOL {.stdcall, dynlib: "user32", importc.}
-when not declared(CheckMenuItem):
-  proc CheckMenuItem(hMenu: HMENU; uIDCheckItem: UINT; uCheck: UINT): DWORD {.
-      stdcall, dynlib: "user32", importc.}
-when not declared(RegisterHotKey):
-  proc RegisterHotKey(hWnd: HWND; id: int32; fsModifiers: UINT; vk: UINT): WINBOOL
-      {.stdcall, dynlib: "user32", importc.}
-when not declared(UnregisterHotKey):
-  proc UnregisterHotKey(hWnd: HWND; id: int32): WINBOOL {.stdcall,
-      dynlib: "user32", importc.}
-when not declared(SetWindowLongPtrW):
-  proc SetWindowLongPtrW(hWnd: HWND; nIndex: int32; dwNewLong: LONG_PTR): LONG_PTR
-      {.stdcall, dynlib: "user32", importc.}
-when not declared(GetClientRect):
-  proc GetClientRect(hWnd: HWND; lpRect: ptr RECT): WINBOOL {.stdcall,
-      dynlib: "user32", importc.}
-when not declared(DwmRegisterThumbnail):
-  proc DwmRegisterThumbnail(hwndDestination: HWND; hwndSource: HWND;
-      phThumbnailId: ptr HANDLE): HRESULT {.stdcall, dynlib: "dwmapi", importc.}
-when not declared(DwmUnregisterThumbnail):
-  proc DwmUnregisterThumbnail(hThumbnailId: HANDLE): HRESULT {.stdcall,
-      dynlib: "dwmapi", importc.}
-when not declared(DwmUpdateThumbnailProperties):
-  proc DwmUpdateThumbnailProperties(hThumbnailId: HANDLE;
-      ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT {.stdcall,
-      dynlib: "dwmapi", importc.}
-when not declared(DwmQueryThumbnailSourceSize):
-  proc DwmQueryThumbnailSourceSize(hThumbnail: HANDLE; pSize: ptr SIZE): HRESULT
-      {.stdcall, dynlib: "dwmapi", importc.}
-when not declared(GetAsyncKeyState):
-  proc GetAsyncKeyState(vKey: int32): int16 {.stdcall, dynlib: "user32", importc.}
-when not declared(IsIconic):
-  proc IsIconic(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32", importc.}
-when not declared(SetForegroundWindow):
-  proc SetForegroundWindow(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32",
-      importc.}
-when not declared(SetTimer):
-  proc SetTimer(hwnd: HWND; nIDEvent: UINT_PTR; uElapse: UINT;
-      lpTimerFunc: pointer): UINT_PTR {.stdcall, dynlib: "user32", importc.}
-when not declared(KillTimer):
-  proc KillTimer(hwnd: HWND; uIDEvent: UINT_PTR): WINBOOL {.stdcall,
-      dynlib: "user32", importc.}
-when not declared(IsWindow):
-  proc IsWindow(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32", importc.}
-when not declared(IsWindowVisible):
-  proc IsWindowVisible(hWnd: HWND): WINBOOL {.stdcall, dynlib: "user32",
-      importc.}
-when not declared(MessageBoxW):
-  proc MessageBoxW(hWnd: HWND; lpText: LPCWSTR; lpCaption: LPCWSTR;
-      uType: UINT): int32 {.stdcall, dynlib: "user32", importc.}
-when not declared(GetWindowTextLengthW):
-  proc GetWindowTextLengthW(hWnd: HWND): int32 {.stdcall, dynlib: "user32",
-      importc.}
-when not declared(GetWindowTextW):
-  proc GetWindowTextW(hWnd: HWND; lpString: LPWSTR; nMaxCount: int32): int32 {.
-      stdcall, dynlib: "user32", importc.}
-when not declared(GetWindowThreadProcessId):
-  proc GetWindowThreadProcessId(hwnd: HWND; lpdwProcessId: ptr DWORD): DWORD {.
-      stdcall, dynlib: "user32", importc.}
-when not declared(OpenProcess):
-  proc OpenProcess(dwDesiredAccess: DWORD; bInheritHandle: WINBOOL;
-      dwProcessId: DWORD): HANDLE {.stdcall, dynlib: "kernel32", importc.}
-when not declared(CloseHandle):
-  proc CloseHandle(hObject: HANDLE): WINBOOL {.stdcall, dynlib: "kernel32",
-      importc.}
-when not declared(QueryFullProcessImageNameW):
-  proc QueryFullProcessImageNameW(hProcess: HANDLE; dwFlags: DWORD;
-      lpExeName: LPWSTR; lpdwSize: ptr DWORD): WINBOOL {.stdcall,
-      dynlib: "kernel32", importc.}
-when not declared(EnumWindows):
-  type
-    EnumWindowsProc = proc(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.}
-  proc EnumWindows(lpEnumFunc: EnumWindowsProc; lParam: LPARAM): WINBOOL {.
-      stdcall, dynlib: "user32", importc.}
-
 import ../config/storage
+import ../util/[geometry, winutils]
+import ../win/[dwmapi, kernel32, user32]
+import ../picker/core
 
 ## Forward declarations for routines used before their definitions.
 proc clientRect(hwnd: HWND): RECT
@@ -136,11 +41,6 @@ const
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
   exStyleLayered = WS_EX_LAYERED
-  DWM_TNP_RECTDESTINATION = 0x1
-  DWM_TNP_RECTSOURCE = 0x2
-  DWM_TNP_OPACITY = 0x4
-  DWM_TNP_VISIBLE = 0x8
-  DWM_TNP_SOURCECLIENTAREAONLY = 0x10
   VK_SHIFT = 0x10
   HTTRANSPARENT = -1
   SW_RESTORE = 9
@@ -148,7 +48,6 @@ const
   validationIntervalMs = 750
   MB_OK = 0x0
   MB_ICONINFORMATION = 0x40
-  PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
   hotkeySelectWindowId = 3001
   MOD_CONTROL = 0x0002
   MOD_SHIFT = 0x0004
@@ -304,45 +203,13 @@ proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
 proc shiftHeld(): bool =
   (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
 
-proc windowTitle(hwnd: HWND): string =
-  let length = GetWindowTextLengthW(hwnd)
-  if length <= 0:
-    return
-  var buf = newWideCString(length + 1)
-  discard GetWindowTextW(hwnd, buf, length + 1)
-  $buf
-
-proc windowProcessIdentity(hwnd: HWND): tuple[name: string, path: string] =
-  var pid: DWORD
-  discard GetWindowThreadProcessId(hwnd, addr pid)
-  if pid == 0:
-    return ("", "")
-
-  let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-  if handle == 0:
-    return ("", "")
-
-  var size = 260.DWORD
-  var buffer = newWideCString(int(size))
-  if QueryFullProcessImageNameW(handle, 0, buffer, addr size) != 0:
-    let path = $buffer
-    result = (splitFile(path).name, path)
-  else:
-    result = ("", "")
-  discard CloseHandle(handle)
-
-proc windowProcessName(hwnd: HWND): string =
-  windowProcessIdentity(hwnd).name
-
-proc windowProcessPath(hwnd: HWND): string =
-  windowProcessIdentity(hwnd).path
-
 proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
+  let procInfo = processIdentity(hwnd, "")
   WindowIdentity(
     hwnd: hwnd,
     title: windowTitle(hwnd),
-    processName: windowProcessName(hwnd),
-    processPath: windowProcessPath(hwnd)
+    processName: procInfo.name,
+    processPath: procInfo.path
   )
 
 proc processMatches(cfg: OverlayConfig; winProcess: string; winPath: string): bool =
