@@ -2,7 +2,7 @@
 import std/[options, os, strutils, widestrs]
 import winim/lean
 import ../util/geometry
-import ../picker/main
+import ../picker/core
 
 when not declared(DWM_THUMBNAIL_PROPERTIES):
   type

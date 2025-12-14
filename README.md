@@ -3,7 +3,7 @@
 Lightweight Windows overlay that mirrors a selected application's client area using DWM thumbnails.
 
 ## Architecture Overview
-- **Picker (`picker/main.nim`)**: enumerates visible, user-facing windows and captures their metadata for selection.
+- **Picker (`picker/core.nim` + `picker/cli.nim`)**: enumerates visible, user-facing windows, captures their metadata for selection, and exposes both console and programmatic entry points.
 - **Overlay state (`config/storage.nim` + `app/overlay.nim`)**: persists the chosen target HWND, overlay geometry, and crop rectangle; rehydrates those settings on launch.
 - **DWM manager (`app/overlay.nim`)**: registers the thumbnail for the selected window, maps overlay clicks to source coordinates, and applies crop/opacity updates.
 
@@ -14,7 +14,7 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 ## Building and Debugging
 - Build the overlay executable: `nimble build app/overlay`
 - Run with debug symbols and stack traces: `nim c -d:debug --stackTrace:on app/overlay.nim`
-- Execute picker standalone for manual testing: `nim c -r picker/main.nim`
+- Execute picker standalone for manual testing: `nim c -r picker/cli.nim`
 - Run geometry/unit tests: `nim c -r tests/geometry_test.nim`
 
 ## Formatting
