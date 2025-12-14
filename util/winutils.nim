@@ -1,6 +1,6 @@
 import std/[os, widestrs]
 import winim/lean
-import ../win/[kernel32, dwmapi]
+import ../win/dwmapi
 
 ## Shared helpers for reading window metadata and visibility characteristics.
 
@@ -18,7 +18,7 @@ proc processIdentity*(hwnd: HWND; unknownName: string = "<unknown>"): tuple[name
   if pid == 0:
     return (unknownName, "")
 
-  let handle = kernel32.OpenProcess(kernel32.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+  let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
   if handle == 0:
     return (unknownName, "")
 
@@ -29,7 +29,7 @@ proc processIdentity*(hwnd: HWND; unknownName: string = "<unknown>"): tuple[name
     result = (splitFile(path).name, path)
   else:
     result = (unknownName, "")
-  discard kernel32.CloseHandle(handle)
+  discard CloseHandle(handle)
 
 proc processName*(hwnd: HWND; unknownName: string = "<unknown>"): string =
   processIdentity(hwnd, unknownName).name
