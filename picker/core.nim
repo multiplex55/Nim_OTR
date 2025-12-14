@@ -1,9 +1,9 @@
 ## Core picker utilities for enumerating and selecting windows without console I/O.
 
-import std/[options, os, strutils, widestrs]
+import std/[options, strutils]
 import winim/lean
 import ../util/winutils
-import ../win/[dwmapi, kernel32, user32]
+import ../win/dwmapi
 
 when not declared(SetROP2):
   proc SetROP2(hdc: HDC; fnDrawMode: int32): int32 {.stdcall, dynlib: "gdi32",

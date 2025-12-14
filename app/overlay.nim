@@ -1,9 +1,9 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[options, os, strutils, widestrs]
+import std/[options, strutils]
 import winim/lean
 import ../config/storage
 import ../util/[geometry, winutils]
-import ../win/[dwmapi, kernel32, user32]
+import ../win/dwmapi
 import ../picker/core
 
 ## Forward declarations for routines used before their definitions.
