@@ -169,9 +169,6 @@ proc processIdentity*(hwnd: HWND): tuple[name: string, path: string] =
     result = ("<unknown>", "")
   discard CloseHandle(handle)
 
-proc processName(hwnd: HWND): string =
-  processIdentity(hwnd).name
-
 proc collectWindowInfo(hwnd: HWND): WindowInfo =
   let procInfo = processIdentity(hwnd)
   WindowInfo(

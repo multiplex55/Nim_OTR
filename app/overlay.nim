@@ -371,7 +371,7 @@ proc findWindowByIdentity*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
   if processMatchesOnly.len == 1:
     return some(processMatchesOnly[0])
 
-proc validateStoredHandle(cfg: OverlayConfig; opts: WindowEligibilityOptions): Option[HWND] =
+proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): Option[HWND] =
   let stored = HWND(cfg.targetHwnd)
   if stored == 0 or IsWindow(stored) == 0:
     return
