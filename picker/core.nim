@@ -117,6 +117,11 @@ type
   WindowEligibilityOptions* = object
     includeCloaked*: bool
 
+  EnumWindowsContext = object
+    opts: ptr WindowEligibilityOptions
+    strict: bool
+    listPtr: ptr seq[WindowInfo]
+
 proc defaultEligibilityOptions*(): WindowEligibilityOptions =
   WindowEligibilityOptions(includeCloaked: false)
 
@@ -226,14 +231,15 @@ proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
 
 proc collectEligibleWindows(opts: WindowEligibilityOptions; strict: bool): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
+  var context = EnumWindowsContext(opts: addr opts, strict: strict, listPtr: addr resultList)
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
-    let listPtr = cast[ptr seq[WindowInfo]](lParam)
-    if shouldIncludeWindow(hwnd, opts, strict):
-      listPtr[].add(collectWindowInfo(hwnd))
+    let ctx = cast[ptr EnumWindowsContext](lParam)
+    if shouldIncludeWindow(hwnd, ctx.opts[], ctx.strict):
+      ctx.listPtr[].add(collectWindowInfo(hwnd))
     1
 
-  discard EnumWindows(callback, cast[LPARAM](addr resultList))
+  discard EnumWindows(callback, cast[LPARAM](addr context))
   resultList
 
 ## Enumerates visible, eligible windows with a fallback to a relaxed filter.
