@@ -94,6 +94,7 @@ type
     targetHwnd: HWND
     thumbnail: HANDLE
     cropRect: RECT
+    targetClientRect: RECT
     hasCrop: bool
     opacity: BYTE
     thumbnailVisible: bool
@@ -133,6 +134,9 @@ proc toWinRect(rect: IntRect): RECT =
     right: LONG(rect.right),
     bottom: LONG(rect.bottom)
   )
+
+proc rectEquals(a, b: RECT): bool =
+  a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   let width = (rect.right - rect.left).int
@@ -477,6 +481,7 @@ proc detachTarget(promptUser: bool) =
   if appState.thumbnail != 0:
     unregisterThumbnail()
   appState.targetHwnd = 0
+  appState.targetClientRect = RECT()
   appState.hasCrop = false
   appState.thumbnailSuppressed = false
   stopValidationTimer()
@@ -532,14 +537,19 @@ proc validateTargetState() =
   elif not shouldSuppress:
     updateThumbnailProperties()
 
+  if not shouldSuppress:
+    refreshCropForSourceResize(clientRect(target))
+
 proc setDefaultCrop(target: HWND) =
   let rect = clientRect(target)
   appState.cropRect = rect
+  appState.targetClientRect = rect
   appState.hasCrop = true
   saveCropToConfig(rect, false)
 
 proc applySavedCrop(target: HWND) =
   let sourceRect = clientRect(target)
+  appState.targetClientRect = sourceRect
   if not appState.cfg.cropActive:
     setDefaultCrop(target)
     updateCropDialogFields()
@@ -564,6 +574,7 @@ proc registerThumbnail(target: HWND) =
   if DwmRegisterThumbnail(appState.hwnd, target, addr thumbnailId) == 0:
     appState.thumbnail = thumbnailId
     appState.targetHwnd = target
+    appState.targetClientRect = clientRect(target)
     let identity = collectWindowIdentity(target)
     appState.cfg.targetHwnd = cast[int](identity.hwnd)
     appState.cfg.targetTitle = identity.title
@@ -597,6 +608,27 @@ proc mapOverlayToSource(overlayRect: RECT): RECT =
   let destRect = overlayDestinationRect()
   let sourceRect = clientRect(appState.targetHwnd).toIntRect
   mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
+
+proc refreshCropForSourceResize(newClient: RECT) =
+  if appState.targetHwnd == 0 or rectEquals(newClient, appState.targetClientRect):
+    return
+
+  appState.targetClientRect = newClient
+  let sourceRect = newClient.toIntRect
+  let currentCrop = appState.cropRect.toIntRect
+  let clamped = clampRect(currentCrop, sourceRect)
+
+  if not appState.cfg.cropActive or width(clamped) == 0 or height(clamped) == 0:
+    appState.cropRect = newClient
+    appState.hasCrop = true
+    saveCropToConfig(newClient, false)
+  else:
+    appState.cropRect = clamped.toWinRect
+    appState.hasCrop = true
+    saveCropToConfig(appState.cropRect, true)
+
+  updateThumbnailProperties()
+  updateCropDialogFields()
 
 var cropDialogClassRegistered = false
 
@@ -991,8 +1023,10 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     paintStatus(hwnd)
     return 0
   of WM_NCHITTEST:
-    if appState.clickThroughEnabled and not shiftHeld():
+    let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
+    if appState.clickThroughEnabled and not shiftHeld() and hit == HTCLIENT:
       return HTTRANSPARENT
+    return hit
   of WM_LBUTTONDOWN:
     if shiftHeld():
       restoreAndFocusTarget()
