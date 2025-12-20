@@ -490,6 +490,8 @@ proc detachTarget(promptUser: bool) =
   updateStatusText()
   updateCropDialogFields()
 
+proc refreshCropForSourceResize(newClient: RECT)
+
 proc validateTargetState() =
   let target = appState.targetHwnd
   if target == 0:
