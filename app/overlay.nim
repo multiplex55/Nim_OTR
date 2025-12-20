@@ -10,6 +10,7 @@ import ../picker/core
 ## Forward declarations for routines used before their definitions.
 proc clientRect(hwnd: HWND): RECT
 proc updateThumbnailProperties()
+proc overlayDestinationRect(): IntRect
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
@@ -340,6 +341,13 @@ proc handleMove(lParam: LPARAM) =
   appState.cfg.x = int(int16(loWordL(lParam)))
   appState.cfg.y = int(int16(hiWordL(lParam)))
 
+proc overlayDestinationRect(): IntRect =
+  let client = clientRect(appState.hwnd).toIntRect
+  let crop = appState.cropRect.toIntRect
+  if width(crop) <= 0 or height(crop) <= 0:
+    return client
+  aspectFitRect(client, (width: width(crop), height: height(crop)))
+
 proc clientRect(hwnd: HWND): RECT =
   var rect: RECT
   if GetClientRect(hwnd, addr rect) != 0:
@@ -356,7 +364,7 @@ proc invalidateStatus() =
 proc updateThumbnailProperties() =
   if appState.thumbnail == 0:
     return
-  let destRect = clientRect(appState.hwnd)
+  let destRect = overlayDestinationRect().toWinRect
   var props: DWM_THUMBNAIL_PROPERTIES
   props.dwFlags = DWM_TNP_VISIBLE or DWM_TNP_OPACITY or DWM_TNP_RECTDESTINATION or
       DWM_TNP_RECTSOURCE or DWM_TNP_SOURCECLIENTAREAONLY
@@ -586,9 +594,7 @@ proc registerThumbnail(target: HWND) =
   updateStatusText()
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
-  # The thumbnail is stretched to fill the overlay client area; map linearly without
-  # letterboxing.
-  let destRect = clientRect(appState.hwnd).toIntRect
+  let destRect = overlayDestinationRect()
   let sourceRect = clientRect(appState.targetHwnd).toIntRect
   mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
 
