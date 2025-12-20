@@ -206,6 +206,7 @@ proc updateCropDialogFields() =
 
 proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
 proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
+proc hiWord(value: WPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
 proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
 
 proc shiftHeld(): bool =
@@ -337,6 +338,34 @@ proc applyWindowStyles(hwnd: HWND) =
     SWP_NOMOVE or SWP_NOSIZE or SWP_FRAMECHANGED or SWP_NOACTIVATE
   )
 
+proc setClientSize(hwnd: HWND; clientWidth, clientHeight: int) =
+  var rect = RECT(left: 0, top: 0, right: LONG(clientWidth), bottom: LONG(clientHeight))
+  let style = DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE))
+  let exStyle = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
+
+  if AdjustWindowRectEx(addr rect, style, FALSE, exStyle) != 0:
+    let windowWidth = rect.right - rect.left
+    let windowHeight = rect.bottom - rect.top
+    discard SetWindowPos(
+      hwnd,
+      0,
+      0,
+      0,
+      windowWidth,
+      windowHeight,
+      SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE
+    )
+  else:
+    discard SetWindowPos(
+      hwnd,
+      0,
+      0,
+      0,
+      int32(clientWidth),
+      int32(clientHeight),
+      SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE
+    )
+
 proc handleSize(lParam: LPARAM) =
   appState.cfg.width = int(loWordL(lParam))
   appState.cfg.height = int(hiWordL(lParam))
@@ -378,6 +407,47 @@ proc updateThumbnailProperties() =
   props.fVisible = (if appState.thumbnailVisible and not appState.thumbnailSuppressed: 1 else: 0)
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
+
+proc adjustOverlaySizeFromScroll(wheelDelta: int16) =
+  if wheelDelta == 0:
+    return
+
+  if appState.targetHwnd == 0:
+    return
+
+  let crop = currentCropRect().toIntRect
+  let cropWidth = width(crop)
+  let cropHeight = height(crop)
+  if cropWidth <= 0 or cropHeight <= 0:
+    return
+
+  let client = clientRect(appState.hwnd).toIntRect
+  let clientWidth = width(client)
+  let clientHeight = height(client)
+  if clientWidth <= 0 or clientHeight <= 0:
+    return
+
+  let currentScale = min(clientWidth.float / cropWidth.float, clientHeight.float / cropHeight.float)
+  if currentScale <= 0:
+    return
+
+  let scaleStep = 1.1
+  let newScale = max(currentScale * (if wheelDelta > 0: scaleStep else: 1.0 / scaleStep), 0.05)
+  let aspect = cropWidth.float / cropHeight.float
+
+  var newClientWidth = int(round(cropWidth.float * newScale))
+  var newClientHeight = int(round(cropHeight.float * newScale))
+
+  let minClientSize = 100
+  if newClientWidth < minClientSize:
+    newClientWidth = minClientSize
+    newClientHeight = int(round(minClientSize.float / aspect))
+
+  if newClientHeight < minClientSize:
+    newClientHeight = minClientSize
+    newClientWidth = int(round(minClientSize.float * aspect))
+
+  setClientSize(appState.hwnd, newClientWidth, newClientHeight)
 
 proc applyWindowOpacity() =
   if appState.hwnd == 0:
@@ -1007,6 +1077,9 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     return 0
   of WM_MOVE:
     handleMove(lParam)
+    return 0
+  of WM_MOUSEWHEEL:
+    adjustOverlaySizeFromScroll(int16(hiWord(wParam)))
     return 0
   of WM_DPICHANGED:
     handleDpiChanged(hwnd, lParam)
