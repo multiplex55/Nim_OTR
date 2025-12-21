@@ -117,7 +117,7 @@ type
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
-  clickThroughEnabled: true
+  clickThroughEnabled: false
 )
 
 proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
@@ -1250,7 +1250,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
       return 0
   of WM_NCHITTEST:
     let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
-    if appState.clickThroughEnabled and not shiftHeld() and hit == HTCLIENT:
+    if appState.clickThroughEnabled and not appState.dragSelecting and not shiftHeld() and hit == HTCLIENT:
       return HTTRANSPARENT
     return hit
   of WM_LBUTTONDOWN:

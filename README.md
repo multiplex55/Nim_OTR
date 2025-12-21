@@ -17,6 +17,12 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 - Execute picker standalone for manual testing: `nim c -r picker/cli.nim`
 - Run geometry/unit tests: `nim c -r tests/geometry_test.nim`
 
+## Using the Overlay and Cropping
+- Select the window to mirror via the context menu or `Ctrl+Shift+P`, then position/size the overlay as needed.
+- To crop with the mouse, click and drag on the overlay to draw a rubber-band rectangle; release to apply the crop to the source window.
+- Drags stay inside the overlay bounds, require a minimal size, and can be cancelled with `Esc`; very small drags are ignored.
+- Press `Reset Crop` in the context menu (or the crop dialog) to clear the selection back to the full source window.
+
 ## Formatting
 Format Nim sources before committing:
 
