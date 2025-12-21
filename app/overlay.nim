@@ -205,9 +205,13 @@ proc dragSelectionAllowed(reason: var string): bool =
   if appState.targetHwnd == 0:
     reason = "no_target"
     return false
-  if not appState.mouseCropEnabled:
+
+  ## Allow dragging whenever mouse crop is armed, or the crop dialog is up,
+  ## so foreground timing cannot block a drag start.
+  if not appState.mouseCropEnabled and not cropDialogVisible():
     reason = "mouse_crop_disabled"
     return false
+
   reason = "ok"
   true
 
@@ -261,12 +265,6 @@ proc updateDragSelection(lParam: LPARAM): bool =
   if not appState.dragSelecting:
     return false
 
-  var reason = ""
-  if not dragSelectionAllowed(reason):
-    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"cancelled"), ("reason", %*reason)])
-    cancelDragSelection()
-    return true
-
   let bounds = selectionBounds()
   if bounds.isNone:
     logEvent("mouse_crop", [("action", %*"update"), ("result", %*"cancelled"), ("reason", %*"no_bounds")])
@@ -282,12 +280,6 @@ proc updateDragSelection(lParam: LPARAM): bool =
 proc finalizeDragSelection(): bool =
   if not appState.dragSelecting:
     return false
-
-  var reason = ""
-  if not dragSelectionAllowed(reason):
-    logEvent("mouse_crop", [("action", %*"finalize"), ("result", %*"cancelled"), ("reason", %*reason)])
-    cancelDragSelection()
-    return true
 
   if GetCapture() == appState.hwnd:
     discard ReleaseCapture()
@@ -700,10 +692,12 @@ proc computeStatusText(): string =
     return "Source is minimized or hidden. Restore it or " & selectAction
 
   var status = ""
-  if appState.mouseCropEnabled:
+  if appState.mouseCropEnabled or cropDialogVisible():
     let dragState = if appState.dragSelecting: "Dragging selection…" else: "Mouse crop enabled. Drag to select a region."
     let clickState = if appState.clickThroughEnabled: "Click-through temporarily ignored while cropping." else: "Click-through off."
     status = dragState & " " & clickState & " ESC cancels."
+  elif appState.targetHwnd != 0:
+    status = "Mouse crop off. Right-click → Mouse Crop to drag a selection."
   status
 
 proc rectDescription(rect: RECT): string =
