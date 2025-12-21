@@ -12,6 +12,7 @@ proc clientRect(hwnd: HWND): RECT
 proc updateThumbnailProperties()
 proc overlayDestinationRect(): IntRect
 proc updateStatusText()
+proc boolLabel(flag: bool): string
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
