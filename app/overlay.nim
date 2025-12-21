@@ -408,6 +408,15 @@ proc updateThumbnailProperties() =
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
 
+proc mouseOverOverlay(lParam: LPARAM): bool =
+  ## WM_MOUSEWHEEL provides screen coordinates in lParam; ensure the topmost
+  ## window at that location is our overlay before acting on the scroll.
+  var point = POINT(
+    x: LONG(int16(loWordL(lParam))),
+    y: LONG(int16(hiWordL(lParam)))
+  )
+  WindowFromPoint(point) == appState.hwnd
+
 proc adjustOverlaySizeFromScroll(wheelDelta: int16) =
   if wheelDelta == 0:
     return
@@ -1079,8 +1088,9 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     handleMove(lParam)
     return 0
   of WM_MOUSEWHEEL:
-    adjustOverlaySizeFromScroll(int16(hiWord(wParam)))
-    return 0
+    if mouseOverOverlay(lParam):
+      adjustOverlaySizeFromScroll(int16(hiWord(wParam)))
+      return 0
   of WM_DPICHANGED:
     handleDpiChanged(hwnd, lParam)
     return 0
