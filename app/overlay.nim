@@ -196,18 +196,27 @@ proc selectionPreviewRect(): Option[RECT] =
     bottom: max(clampedStart.y, clampedCurrent.y)
   ))
 
-proc cropDialogActive(): bool =
-  if appState.cropDialog.hwnd == 0:
+proc cropDialogVisible(): bool =
+  appState.cropDialog.hwnd != 0 and IsWindowVisible(appState.cropDialog.hwnd) != 0
+
+proc dragSelectionAllowed(reason: var string): bool =
+  if appState.targetHwnd == 0:
+    reason = "no_target"
     return false
-  if IsWindowVisible(appState.cropDialog.hwnd) == 0:
+  if not appState.mouseCropEnabled:
+    reason = "mouse_crop_disabled"
     return false
-  let foreground = GetForegroundWindow()
-  foreground == appState.cropDialog.hwnd or foreground == appState.hwnd
+  if not cropDialogVisible():
+    reason = "crop_dialog_not_visible"
+    return false
+  reason = "ok"
+  true
 
 proc clearDragSelection(invalidate: bool = true) =
   appState.dragSelecting = false
   appState.dragStart = POINT()
   appState.dragCurrent = POINT()
+  updateStatusText()
   if invalidate and appState.hwnd != 0:
     discard InvalidateRect(appState.hwnd, nil, FALSE)
 
@@ -219,11 +228,14 @@ proc cancelDragSelection() =
   clearDragSelection()
 
 proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
-  if appState.targetHwnd == 0 or not appState.mouseCropEnabled or not cropDialogActive():
+  var reason = ""
+  if not dragSelectionAllowed(reason):
+    logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*reason)])
     return false
 
   let bounds = selectionBounds()
   if bounds.isNone:
+    logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*"no_bounds")])
     return false
 
   var start = toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam)))
@@ -232,20 +244,33 @@ proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
   appState.dragSelecting = true
   appState.dragStart = start
   appState.dragCurrent = start
+  updateStatusText()
   discard SetCapture(hwnd)
   discard InvalidateRect(hwnd, nil, FALSE)
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"begin"),
+      ("result", %*"started"),
+      ("x", %*int(start.x)),
+      ("y", %*int(start.y))
+    ]
+  )
   true
 
 proc updateDragSelection(lParam: LPARAM): bool =
   if not appState.dragSelecting:
     return false
 
-  if not appState.mouseCropEnabled or not cropDialogActive():
+  var reason = ""
+  if not dragSelectionAllowed(reason):
+    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"cancelled"), ("reason", %*reason)])
     cancelDragSelection()
     return true
 
   let bounds = selectionBounds()
   if bounds.isNone:
+    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"cancelled"), ("reason", %*"no_bounds")])
     cancelDragSelection()
     return true
 
@@ -259,7 +284,9 @@ proc finalizeDragSelection(): bool =
   if not appState.dragSelecting:
     return false
 
-  if not appState.mouseCropEnabled or not cropDialogActive():
+  var reason = ""
+  if not dragSelectionAllowed(reason):
+    logEvent("mouse_crop", [("action", %*"finalize"), ("result", %*"cancelled"), ("reason", %*reason)])
     cancelDragSelection()
     return true
 
@@ -270,17 +297,38 @@ proc finalizeDragSelection(): bool =
   clearDragSelection(false)
 
   if preview.isNone:
+    logEvent("mouse_crop", [("action", %*"finalize"), ("result", %*"no_preview")])
     discard InvalidateRect(appState.hwnd, nil, FALSE)
     return true
 
   let rect = preview.get()
   if rectWidth(rect) < minSelectionSize or rectHeight(rect) < minSelectionSize:
+    logEvent(
+      "mouse_crop",
+      [
+        ("action", %*"finalize"),
+        ("result", %*"too_small"),
+        ("width", %*rectWidth(rect)),
+        ("height", %*rectHeight(rect))
+      ]
+    )
     if shiftHeld():
       restoreAndFocusTarget()
     discard InvalidateRect(appState.hwnd, nil, FALSE)
     return true
 
   setCropFromOverlayRect(rect)
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"finalize"),
+      ("result", %*"applied"),
+      ("left", %*int(rect.left)),
+      ("top", %*int(rect.top)),
+      ("right", %*int(rect.right)),
+      ("bottom", %*int(rect.bottom))
+    ]
+  )
   discard InvalidateRect(appState.hwnd, nil, FALSE)
   true
 
@@ -453,6 +501,26 @@ proc updateContextMenuChecks() =
 
   let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
+
+proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
+  if appState.mouseCropEnabled == enabled:
+    return
+  appState.mouseCropEnabled = enabled
+  if enabled and appState.clickThroughEnabled:
+    appState.clickThroughEnabled = false
+  if not enabled:
+    cancelDragSelection()
+  updateContextMenuChecks()
+  updateStatusText()
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"mode_toggle"),
+      ("enabled", %*enabled),
+      ("source", %*source),
+      ("clickThrough", %*appState.clickThroughEnabled)
+    ]
+  )
 
 proc destroyContextMenu() =
   if appState.contextMenu == 0:
@@ -632,7 +700,13 @@ proc computeStatusText(): string =
   if appState.thumbnailSuppressed:
     return "Source is minimized or hidden. Restore it or " & selectAction
 
-  ""
+  var status = ""
+  if appState.mouseCropEnabled:
+    let dialogVisible = cropDialogVisible()
+    let dragState = if appState.dragSelecting: "Dragging selection…" else: "Mouse crop enabled. Drag to select a region."
+    let clickState = if appState.clickThroughEnabled: "Click-through temporarily ignored while cropping." else: "Click-through off."
+    status = dragState & " " & clickState & " Dialog visible: " & boolLabel(dialogVisible)
+  status
 
 proc rectDescription(rect: RECT): string =
   "L:" & $rect.left & " T:" & $rect.top & " R:" & $rect.right & " B:" & $rect.bottom
@@ -662,6 +736,10 @@ proc showDebugInfo() =
   let crop = currentCropRect()
   lines.add("Crop: " & rectDescription(crop))
   lines.add("Opacity: " & $int(appState.opacity))
+  lines.add("Mouse Crop Enabled: " & boolLabel(appState.mouseCropEnabled))
+  lines.add("Drag Selecting: " & boolLabel(appState.dragSelecting))
+  lines.add("Click-through Enabled: " & boolLabel(appState.clickThroughEnabled))
+  lines.add("Crop Dialog Visible: " & boolLabel(cropDialogVisible()))
 
   discard MessageBoxW(
     appState.hwnd,
@@ -1056,7 +1134,7 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
   of WM_DESTROY:
     if appState.cropDialog.hwnd == hwnd:
       appState.cropDialog = CropDialogState()
-      appState.mouseCropEnabled = false
+      updateStatusText()
     return 0
   else:
     discard
@@ -1208,9 +1286,9 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idEditCrop:
     showCropDialog()
   of idMouseCrop:
-    appState.mouseCropEnabled = true
-    appState.clickThroughEnabled = false
-    showCropDialog()
+    setMouseCropEnabled(not appState.mouseCropEnabled)
+    if appState.mouseCropEnabled:
+      showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
   of idShowDebugInfo:
@@ -1284,6 +1362,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_RBUTTONDOWN:
     if shiftHeld():
       appState.clickThroughEnabled = not appState.clickThroughEnabled
+      updateStatusText()
       return 0
   of WM_PAINT:
     paintStatus(hwnd)
@@ -1293,13 +1372,13 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
       return 0
   of WM_NCHITTEST:
     let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
-    if appState.clickThroughEnabled and not appState.dragSelecting and not shiftHeld() and hit == HTCLIENT:
+    if appState.clickThroughEnabled and not appState.mouseCropEnabled and not appState.dragSelecting and not shiftHeld() and hit == HTCLIENT:
       return HTTRANSPARENT
     return hit
   of WM_LBUTTONDOWN:
     if beginDragSelection(hwnd, lParam):
       return 0
-    if shiftHeld():
+    if shiftHeld() and not appState.mouseCropEnabled:
       restoreAndFocusTarget()
     return DefWindowProcW(hwnd, msg, wParam, lParam)
   of WM_LBUTTONUP:
