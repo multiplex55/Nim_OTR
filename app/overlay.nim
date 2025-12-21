@@ -15,6 +15,7 @@ proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
 proc setCrop*(rect: RECT)
+proc setCropFromOverlayRect*(rect: RECT)
 proc resetCrop*()
 proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
 proc loWordL(value: LPARAM): UINT
