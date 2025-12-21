@@ -208,9 +208,6 @@ proc dragSelectionAllowed(reason: var string): bool =
   if not appState.mouseCropEnabled:
     reason = "mouse_crop_disabled"
     return false
-  if not cropDialogVisible():
-    reason = "crop_dialog_not_visible"
-    return false
   reason = "ok"
   true
 
@@ -704,10 +701,9 @@ proc computeStatusText(): string =
 
   var status = ""
   if appState.mouseCropEnabled:
-    let dialogVisible = cropDialogVisible()
     let dragState = if appState.dragSelecting: "Dragging selection…" else: "Mouse crop enabled. Drag to select a region."
     let clickState = if appState.clickThroughEnabled: "Click-through temporarily ignored while cropping." else: "Click-through off."
-    status = dragState & " " & clickState & " Dialog visible: " & boolLabel(dialogVisible)
+    status = dragState & " " & clickState & " ESC cancels."
   status
 
 proc rectDescription(rect: RECT): string =
@@ -742,6 +738,20 @@ proc showDebugInfo() =
   lines.add("Drag Selecting: " & boolLabel(appState.dragSelecting))
   lines.add("Click-through Enabled: " & boolLabel(appState.clickThroughEnabled))
   lines.add("Crop Dialog Visible: " & boolLabel(cropDialogVisible()))
+  let captureOwner = GetCapture()
+  lines.add("Has Capture: " & boolLabel(captureOwner == appState.hwnd) &
+      " (owner: 0x" & toHex(int(captureOwner), 8) & ")")
+  let foreground = GetForegroundWindow()
+  lines.add(
+    "Foreground: 0x" & toHex(int(foreground), 8) &
+    " (overlay: " & boolLabel(foreground == appState.hwnd) &
+    ", crop dialog: " & boolLabel(foreground == appState.cropDialog.hwnd) & ")"
+  )
+  if appState.dragSelecting:
+    lines.add(
+      "Drag Start: " & $appState.dragStart.x & "," & $appState.dragStart.y &
+      " Current: " & $appState.dragCurrent.x & "," & $appState.dragCurrent.y
+    )
 
   discard MessageBoxW(
     appState.hwnd,
@@ -1286,6 +1296,7 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     appState.cfg.borderless = not appState.cfg.borderless
     applyWindowStyles(hwnd)
   of idEditCrop:
+    setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
   of idMouseCrop:
     setMouseCropEnabled(not appState.mouseCropEnabled)
@@ -1363,8 +1374,11 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     return 0
   of WM_RBUTTONDOWN:
     if shiftHeld():
-      appState.clickThroughEnabled = not appState.clickThroughEnabled
-      updateStatusText()
+      if appState.mouseCropEnabled:
+        logEvent("mouse_crop", [("action", %*"clickthrough_toggle"), ("result", %*"ignored_in_crop_mode")])
+      else:
+        appState.clickThroughEnabled = not appState.clickThroughEnabled
+        updateStatusText()
       return 0
   of WM_PAINT:
     paintStatus(hwnd)
