@@ -31,3 +31,14 @@ suite "geometry mapping":
     let sourceRect = rect(0, 0, 400, 200)
     let mapped = mapRectToSource(overlayRect, destRect, sourceRect)
     assertRectEquals(mapped, rect(0, 0, 400, 200))
+
+suite "aspect fitting":
+  test "adds horizontal letterboxing when bounds are wider":
+    let bounds = rect(0, 0, 1920, 1080)
+    let fitted = aspectFitRect(bounds, (width: 800, height: 600))
+    assertRectEquals(fitted, rect(240, 0, 1680, 1080))
+
+  test "adds vertical pillarboxing when bounds are taller":
+    let bounds = rect(0, 0, 900, 1600)
+    let fitted = aspectFitRect(bounds, (width: 800, height: 600))
+    assertRectEquals(fitted, rect(0, 350, 900, 1250))
