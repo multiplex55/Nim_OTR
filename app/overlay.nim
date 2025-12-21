@@ -44,7 +44,9 @@ const
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
   exStyleLayered = WS_EX_LAYERED
+  minSelectionSize = 8
   VK_SHIFT = 0x10
+  VK_ESCAPE = 0x1B
   HTTRANSPARENT = -1
   SW_RESTORE = 9
   validationTimerId = 2001
@@ -106,6 +108,9 @@ type
     clickThroughEnabled: bool
     selectingTarget: bool
     statusText: string
+    dragSelecting: bool
+    dragStart: POINT
+    dragCurrent: POINT
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -135,8 +140,118 @@ proc toWinRect(rect: IntRect): RECT =
     bottom: LONG(rect.bottom)
   )
 
+proc toPoint(x, y: int32): POINT =
+  POINT(x: LONG(x), y: LONG(y))
+
 proc rectEquals(a, b: RECT): bool =
   a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom
+
+proc rectWidth(rect: RECT): int =
+  (rect.right - rect.left).int
+
+proc rectHeight(rect: RECT): int =
+  (rect.bottom - rect.top).int
+
+proc clampPointToRect(point: POINT; bounds: RECT): POINT =
+  POINT(
+    x: max(bounds.left, min(point.x, bounds.right)),
+    y: max(bounds.top, min(point.y, bounds.bottom))
+  )
+
+proc selectionBounds(): Option[RECT] =
+  let bounds = overlayDestinationRect().toWinRect
+  if rectWidth(bounds) <= 0 or rectHeight(bounds) <= 0:
+    return
+  some(bounds)
+
+proc selectionPreviewRect(): Option[RECT] =
+  if not appState.dragSelecting:
+    return
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    return
+
+  let clampedStart = clampPointToRect(appState.dragStart, bounds.get())
+  let clampedCurrent = clampPointToRect(appState.dragCurrent, bounds.get())
+
+  some(RECT(
+    left: min(clampedStart.x, clampedCurrent.x),
+    top: min(clampedStart.y, clampedCurrent.y),
+    right: max(clampedStart.x, clampedCurrent.x),
+    bottom: max(clampedStart.y, clampedCurrent.y)
+  ))
+
+proc clearDragSelection(invalidate: bool = true) =
+  appState.dragSelecting = false
+  appState.dragStart = POINT()
+  appState.dragCurrent = POINT()
+  if invalidate and appState.hwnd != 0:
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+
+proc cancelDragSelection() =
+  if not appState.dragSelecting:
+    return
+  if GetCapture() == appState.hwnd:
+    discard ReleaseCapture()
+  clearDragSelection()
+
+proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
+  if appState.targetHwnd == 0:
+    return false
+
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    return false
+
+  var start = toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam)))
+  start = clampPointToRect(start, bounds.get())
+
+  appState.dragSelecting = true
+  appState.dragStart = start
+  appState.dragCurrent = start
+  discard SetCapture(hwnd)
+  discard InvalidateRect(hwnd, nil, FALSE)
+  true
+
+proc updateDragSelection(lParam: LPARAM): bool =
+  if not appState.dragSelecting:
+    return false
+
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    cancelDragSelection()
+    return true
+
+  let nextPoint = clampPointToRect(toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam))), bounds.get())
+  if nextPoint.x != appState.dragCurrent.x or nextPoint.y != appState.dragCurrent.y:
+    appState.dragCurrent = nextPoint
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+  true
+
+proc finalizeDragSelection(): bool =
+  if not appState.dragSelecting:
+    return false
+
+  if GetCapture() == appState.hwnd:
+    discard ReleaseCapture()
+
+  let preview = selectionPreviewRect()
+  clearDragSelection(false)
+
+  if preview.isNone:
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+    return true
+
+  let rect = preview.get()
+  if rectWidth(rect) < minSelectionSize or rectHeight(rect) < minSelectionSize:
+    if shiftHeld():
+      restoreAndFocusTarget()
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+    return true
+
+  setCropFromOverlayRect(rect)
+  discard InvalidateRect(appState.hwnd, nil, FALSE)
+  true
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   let width = (rect.right - rect.left).int
@@ -534,6 +649,24 @@ proc updateStatusText() =
     appState.statusText = nextStatus
     invalidateStatus()
 
+proc drawSelectionPreview(hdc: HDC) =
+  let preview = selectionPreviewRect()
+  if preview.isNone:
+    return
+
+  let rect = preview.get()
+  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+  let brush = CreateHatchBrush(HS_DIAGCROSS, RGB(0, 120, 215))
+  let oldPen = SelectObject(hdc, pen)
+  let oldBrush = SelectObject(hdc, brush)
+
+  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+
+  discard SelectObject(hdc, oldPen)
+  discard SelectObject(hdc, oldBrush)
+  discard DeleteObject(pen)
+  discard DeleteObject(brush)
+
 proc paintStatus(hwnd: HWND) =
   var ps: PAINTSTRUCT
   let hdc = BeginPaint(hwnd, addr ps)
@@ -541,20 +674,20 @@ proc paintStatus(hwnd: HWND) =
     discard EndPaint(hwnd, addr ps)
 
   let status = appState.statusText
-  if status.len == 0:
-    return
+  if status.len > 0:
+    var rect = clientRect(hwnd)
+    discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
+    discard SetBkMode(hdc, TRANSPARENT)
+    discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
+    discard DrawTextW(
+      hdc,
+      status.newWideCString,
+      -1,
+      addr rect,
+      DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
+    )
 
-  var rect = clientRect(hwnd)
-  discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
-  discard SetBkMode(hdc, TRANSPARENT)
-  discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
-  discard DrawTextW(
-    hdc,
-    status.newWideCString,
-    -1,
-    addr rect,
-    DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
-  )
+  drawSelectionPreview(hdc)
 
 proc detachTarget(promptUser: bool) =
   if appState.thumbnail != 0:
@@ -687,7 +820,7 @@ proc registerThumbnail(target: HWND) =
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
   let destRect = overlayDestinationRect()
-  let sourceRect = clientRect(appState.targetHwnd).toIntRect
+  let sourceRect = currentCropRect().toIntRect
   mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
 
 proc refreshCropForSourceResize(newClient: RECT) =
@@ -1047,6 +1180,9 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     discard
 
 proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
+  if appState.dragSelecting:
+    cancelDragSelection()
+
   createContextMenu()
   updateContextMenuChecks()
   if appState.contextMenu == 0:
@@ -1107,19 +1243,34 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_PAINT:
     paintStatus(hwnd)
     return 0
+  of WM_MOUSEMOVE:
+    if updateDragSelection(lParam):
+      return 0
   of WM_NCHITTEST:
     let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
     if appState.clickThroughEnabled and not shiftHeld() and hit == HTCLIENT:
       return HTTRANSPARENT
     return hit
   of WM_LBUTTONDOWN:
+    if beginDragSelection(hwnd, lParam):
+      return 0
     if shiftHeld():
       restoreAndFocusTarget()
     return DefWindowProcW(hwnd, msg, wParam, lParam)
+  of WM_LBUTTONUP:
+    if finalizeDragSelection():
+      return 0
   of WM_TIMER:
     if wParam == validationTimerId:
       validateTargetState()
       return 0
+  of WM_KEYDOWN:
+    if int32(wParam) == VK_ESCAPE:
+      cancelDragSelection()
+      return 0
+  of WM_CAPTURECHANGED, WM_CANCELMODE:
+    cancelDragSelection()
+    return 0
   of WM_DESTROY:
     stopValidationTimer()
     unregisterThumbnail()
