@@ -1089,6 +1089,7 @@ proc showCropDialog() =
   if hwnd != 0:
     discard ShowWindow(hwnd, SW_SHOWNORMAL)
     discard UpdateWindow(hwnd)
+    discard SetForegroundWindow(hwnd)
 
 ## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
@@ -1208,6 +1209,7 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     showCropDialog()
   of idMouseCrop:
     appState.mouseCropEnabled = true
+    appState.clickThroughEnabled = false
     showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
