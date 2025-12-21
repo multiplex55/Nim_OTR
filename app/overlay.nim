@@ -17,6 +17,8 @@ proc stopValidationTimer()
 proc setCrop*(rect: RECT)
 proc resetCrop*()
 proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
+proc loWordL(value: LPARAM): UINT
+proc hiWordL(value: LPARAM): UINT
 
 const
   className = L"NimOTROverlayClass"
