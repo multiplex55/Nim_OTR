@@ -11,6 +11,7 @@ import ../picker/core
 proc clientRect(hwnd: HWND): RECT
 proc updateThumbnailProperties()
 proc overlayDestinationRect(): IntRect
+proc updateStatusText()
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
