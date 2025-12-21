@@ -29,7 +29,8 @@ const
   idEditCrop = 1003
   idResetCrop = 1004
   idShowDebugInfo = 1005
-  idExit = 1006
+  idMouseCrop = 1006
+  idExit = 1007
 
   idCropLeft = 2001
   idCropTop = 2002
@@ -69,13 +70,14 @@ let
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelCrop = L"Crop…"
+  menuLabelMouseCrop = L"Mouse Crop"
   menuLabelResetCrop = L"Reset Crop"
   menuLabelDebugInfo = L"Debug Info"
   menuLabelExit = L"Exit"
 
   cropDialogClass = L"NimOTRCropDialog"
-  cropDialogWidth = 280
-  cropDialogHeight = 210
+  cropDialogWidth = 320
+  cropDialogHeight = 240
 
 type
   CropDialogState = object
@@ -84,6 +86,8 @@ type
     editTop: HWND
     editWidth: HWND
     editHeight: HWND
+    applyButton: HWND
+    resetButton: HWND
 
   WindowIdentity = object
     hwnd: HWND
@@ -113,6 +117,7 @@ type
     dragSelecting: bool
     dragStart: POINT
     dragCurrent: POINT
+    mouseCropEnabled: bool
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -191,6 +196,14 @@ proc selectionPreviewRect(): Option[RECT] =
     bottom: max(clampedStart.y, clampedCurrent.y)
   ))
 
+proc cropDialogActive(): bool =
+  if appState.cropDialog.hwnd == 0:
+    return false
+  if IsWindowVisible(appState.cropDialog.hwnd) == 0:
+    return false
+  let foreground = GetForegroundWindow()
+  foreground == appState.cropDialog.hwnd or foreground == appState.hwnd
+
 proc clearDragSelection(invalidate: bool = true) =
   appState.dragSelecting = false
   appState.dragStart = POINT()
@@ -206,7 +219,7 @@ proc cancelDragSelection() =
   clearDragSelection()
 
 proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
-  if appState.targetHwnd == 0:
+  if appState.targetHwnd == 0 or not appState.mouseCropEnabled or not cropDialogActive():
     return false
 
   let bounds = selectionBounds()
@@ -227,6 +240,10 @@ proc updateDragSelection(lParam: LPARAM): bool =
   if not appState.dragSelecting:
     return false
 
+  if not appState.mouseCropEnabled or not cropDialogActive():
+    cancelDragSelection()
+    return true
+
   let bounds = selectionBounds()
   if bounds.isNone:
     cancelDragSelection()
@@ -241,6 +258,10 @@ proc updateDragSelection(lParam: LPARAM): bool =
 proc finalizeDragSelection(): bool =
   if not appState.dragSelecting:
     return false
+
+  if not appState.mouseCropEnabled or not cropDialogActive():
+    cancelDragSelection()
+    return true
 
   if GetCapture() == appState.hwnd:
     discard ReleaseCapture()
@@ -412,6 +433,7 @@ proc createContextMenu() =
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
+  discard AppendMenuW(menu, menuTopFlags, idMouseCrop, menuLabelMouseCrop)
   discard AppendMenuW(menu, menuTopFlags, idResetCrop, menuLabelResetCrop)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
@@ -428,6 +450,9 @@ proc updateContextMenuChecks() =
 
   let borderFlags: UINT = UINT(if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
+
+  let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
+  discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
 
 proc destroyContextMenu() =
   if appState.contextMenu == 0:
@@ -943,6 +968,8 @@ proc initCropDialogControls(hwnd: HWND) =
     nil
   )
   setControlFont(applyBtn)
+  appState.cropDialog.applyButton = applyBtn
+  discard SendMessageW(appState.cropDialog.applyButton, BM_SETSTYLE, WPARAM(BS_DEFPUSHBUTTON), LPARAM(TRUE))
 
   let resetBtn = CreateWindowExW(
     0,
@@ -959,6 +986,8 @@ proc initCropDialogControls(hwnd: HWND) =
     nil
   )
   setControlFont(resetBtn)
+  appState.cropDialog.resetButton = resetBtn
+  discard SendMessageW(appState.cropDialog.resetButton, BM_SETSTYLE, WPARAM(BS_PUSHBUTTON), LPARAM(TRUE))
 
 proc showCropValidation(message: string) =
   discard MessageBoxW(
@@ -1017,12 +1046,17 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
     else:
       discard
     return 0
+  of WM_KEYDOWN:
+    if int32(wParam) == VK_RETURN:
+      applyCropFromDialog()
+      return 0
   of WM_CLOSE:
     discard DestroyWindow(hwnd)
     return 0
   of WM_DESTROY:
     if appState.cropDialog.hwnd == hwnd:
       appState.cropDialog = CropDialogState()
+      appState.mouseCropEnabled = false
     return 0
   else:
     discard
@@ -1038,7 +1072,7 @@ proc showCropDialog() =
     return
 
   let hwnd = CreateWindowExW(
-    WS_EX_TOOLWINDOW,
+    WS_EX_TOOLWINDOW or WS_EX_CONTROLPARENT,
     cropDialogClass,
     L"Crop",
     WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
@@ -1172,6 +1206,9 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     applyWindowStyles(hwnd)
   of idEditCrop:
     showCropDialog()
+  of idMouseCrop:
+    appState.mouseCropEnabled = true
+    showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
   of idShowDebugInfo:
@@ -1242,6 +1279,10 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_CONTEXTMENU:
     handleContextMenu(hwnd, lParam)
     return 0
+  of WM_RBUTTONDOWN:
+    if shiftHeld():
+      appState.clickThroughEnabled = not appState.clickThroughEnabled
+      return 0
   of WM_PAINT:
     paintStatus(hwnd)
     return 0
@@ -1343,6 +1384,8 @@ proc runOverlayLoop*() =
 
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
+    if appState.cropDialog.hwnd != 0 and IsDialogMessageW(appState.cropDialog.hwnd, addr msg) != 0:
+      continue
     discard TranslateMessage(addr msg)
     discard DispatchMessageW(addr msg)
 

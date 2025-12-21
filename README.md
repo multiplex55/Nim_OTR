@@ -19,9 +19,10 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 
 ## Using the Overlay and Cropping
 - Select the window to mirror via the context menu or `Ctrl+Shift+P`, then position/size the overlay as needed.
-- To crop with the mouse, click and drag on the overlay to draw a rubber-band rectangle; release to apply the crop to the source window.
-- Drags stay inside the overlay bounds, require a minimal size, and can be cancelled with `Esc`; very small drags are ignored.
+- Right-click the overlay and choose **Crop…** to open the crop window, then pick **Mouse Crop** to enable drag-based selection. Use Tab/Shift+Tab to move between fields and press Enter to apply.
+- While the crop window is open and mouse crop is enabled, click-drag on the overlay to draw a rubber-band rectangle; release to apply the crop and sync the dialog values. Drags stay inside the overlay bounds, require a minimal size, and can be cancelled with `Esc`; very small drags are ignored.
 - Press `Reset Crop` in the context menu (or the crop dialog) to clear the selection back to the full source window.
+- Press Shift + right-click on the overlay to toggle click-through mode when you need to interact with the underlying window.
 
 ## Formatting
 Format Nim sources before committing:
