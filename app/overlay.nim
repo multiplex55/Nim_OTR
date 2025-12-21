@@ -18,9 +18,6 @@ proc setCrop*(rect: RECT)
 proc setCropFromOverlayRect*(rect: RECT)
 proc resetCrop*()
 proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
-proc loWordL(value: LPARAM): UINT
-proc hiWordL(value: LPARAM): UINT
-proc shiftHeld(): bool
 proc restoreAndFocusTarget()
 
 const
@@ -147,6 +144,14 @@ proc toWinRect(rect: IntRect): RECT =
 
 proc toPoint(x, y: int32): POINT =
   POINT(x: LONG(x), y: LONG(y))
+
+proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
+proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
+proc hiWord(value: WPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
+proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
+
+proc shiftHeld(): bool =
+  (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
 
 proc rectEquals(a, b: RECT): bool =
   a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom
@@ -323,14 +328,6 @@ proc updateCropDialogFields() =
   setEditText(appState.cropDialog.editTop, rect.top.int)
   setEditText(appState.cropDialog.editWidth, width)
   setEditText(appState.cropDialog.editHeight, height)
-
-proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
-proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
-proc hiWord(value: WPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
-proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
-
-proc shiftHeld(): bool =
-  (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
 
 proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
   let procInfo = processIdentity(hwnd, "")
