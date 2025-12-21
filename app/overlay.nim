@@ -1,5 +1,5 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[json, options, strutils]
+import std/[json, options, strutils, math]
 import winim/lean
 import ../config/storage
 import ../util/[geometry, winutils]
