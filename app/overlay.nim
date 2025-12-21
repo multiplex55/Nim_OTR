@@ -20,6 +20,7 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
 proc loWordL(value: LPARAM): UINT
 proc hiWordL(value: LPARAM): UINT
 proc shiftHeld(): bool
+proc restoreAndFocusTarget()
 
 const
   className = L"NimOTROverlayClass"
