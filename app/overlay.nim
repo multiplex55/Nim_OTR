@@ -33,6 +33,8 @@ const
   idShowDebugInfo = 1005
   idMouseCrop = 1006
   idExit = 1007
+  idWindowMenuNone = 1100
+  idWindowMenuStart = 1101
 
   idCropLeft = 2001
   idCropTop = 2002
@@ -68,6 +70,8 @@ when not declared(WM_DPICHANGED):
 
 let
   menuLabelSelectWindow = L"Select Window… (Ctrl+Shift+P)"
+  menuLabelWindowList = L"Target Window"
+  menuLabelWindowNone = L"None"
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelCrop = L"Crop…"
@@ -125,12 +129,15 @@ type
     dragWindowOffset: POINT
     baseStyle: DWORD
     baseExStyle: DWORD
+    windowSelectionMenu: HMENU
+    windowMenuItems: seq[HWND]
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
   clickThroughEnabled: false,
-  baseStyle: DWORD(styleStandard)
+  baseStyle: DWORD(styleStandard),
+  windowMenuItems: @[]
 )
 
 proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
@@ -580,6 +587,54 @@ proc restoreAndFocusTarget() =
     ## Future: forward the click to the source window when enabled.
     discard
 
+proc clearWindowSelectionMenu() =
+  if appState.windowSelectionMenu == 0:
+    return
+
+  let count = GetMenuItemCount(appState.windowSelectionMenu)
+  if count == UINT(-1) or count == 0:
+    appState.windowMenuItems.setLen(0)
+    return
+
+  for i in countdown(int(count) - 1, 0):
+    discard RemoveMenu(appState.windowSelectionMenu, UINT(i), MF_BYPOSITION)
+
+  appState.windowMenuItems.setLen(0)
+
+proc populateWindowSelectionMenu() =
+  if appState.contextMenu == 0:
+    return
+
+  if appState.windowSelectionMenu == 0:
+    appState.windowSelectionMenu = CreatePopupMenu()
+    if appState.windowSelectionMenu == 0:
+      return
+
+    discard AppendMenuW(
+      appState.contextMenu,
+      MF_POPUP or menuTopFlags,
+      cast[UINT_PTR](appState.windowSelectionMenu),
+      menuLabelWindowList
+    )
+
+  clearWindowSelectionMenu()
+  discard AppendMenuW(appState.windowSelectionMenu, menuTopFlags, idWindowMenuNone, menuLabelWindowNone)
+
+  let windows = enumTopLevelWindows(currentEligibilityOptions())
+  var nextId: UINT = idWindowMenuStart
+  for win in windows:
+    let title = if win.title.len > 0: win.title else: "(No Title)"
+    let desktopLabel =
+      if win.desktopId.isSome:
+        win.desktopId.get()
+      else:
+        windowDesktopLabel(win.hwnd)
+    let label = title & " — " & win.processName & " [" & desktopLabel & "]"
+
+    if AppendMenuW(appState.windowSelectionMenu, menuTopFlags, nextId, label.newWideCString) != 0:
+      appState.windowMenuItems.add(win.hwnd)
+      inc nextId
+
 proc createContextMenu() =
   if appState.contextMenu != 0:
     return
@@ -589,6 +644,7 @@ proc createContextMenu() =
     return
 
   appState.contextMenu = menu
+  populateWindowSelectionMenu()
   discard AppendMenuW(menu, menuTopFlags, idSelectWindow, menuLabelSelectWindow)
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
@@ -640,6 +696,8 @@ proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
 proc destroyContextMenu() =
   if appState.contextMenu == 0:
     return
+  appState.windowSelectionMenu = 0
+  appState.windowMenuItems.setLen(0)
   discard DestroyMenu(appState.contextMenu)
   appState.contextMenu = 0
 
@@ -1445,7 +1503,8 @@ proc selectTarget() =
     logEvent("selection", [("status", %*"cancelled")])
 
 proc handleCommand(hwnd: HWND, wParam: WPARAM) =
-  case loWord(wParam)
+  let commandId = loWord(wParam)
+  case commandId
   of idSelectWindow:
     selectTarget()
   of idToggleTopMost:
@@ -1470,13 +1529,19 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idExit:
     discard PostMessageW(hwnd, WM_CLOSE, 0, 0)
   else:
-    discard
+    if commandId == idWindowMenuNone:
+      setTargetWindow(0)
+    elif int(commandId) >= idWindowMenuStart:
+      let index = int(commandId) - idWindowMenuStart
+      if index >= 0 and index < appState.windowMenuItems.len:
+        setTargetWindow(appState.windowMenuItems[index])
 
 proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
   if appState.dragSelecting:
     cancelDragSelection()
 
   createContextMenu()
+  populateWindowSelectionMenu()
   updateContextMenuChecks()
   if appState.contextMenu == 0:
     return
