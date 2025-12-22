@@ -793,7 +793,7 @@ proc computeStatusText(): string =
   if appState.targetHwnd == 0:
     if appState.promptedForReselect:
       return "Source window closed. " & selectAction
-    return "No window selected. " & selectAction
+    return "Right-click here to start… (Ctrl+Shift+P)"
 
   if appState.thumbnailSuppressed:
     return "Source is minimized or hidden. Restore it or " & selectAction
@@ -893,9 +893,10 @@ proc paintStatus(hwnd: HWND) =
     discard EndPaint(hwnd, addr ps)
 
   let status = appState.statusText
+  var rect = clientRect(hwnd)
+  discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
+
   if status.len > 0:
-    var rect = clientRect(hwnd)
-    discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
     discard SetBkMode(hdc, TRANSPARENT)
     discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
     discard DrawTextW(
@@ -1441,9 +1442,6 @@ proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
     nil
   )
 
-proc saveStateOnClose() =
-  saveOverlayConfig(appState.cfg)
-
 proc startValidationTimer() =
   if appState.validationTimerRunning or appState.hwnd == 0 or appState.targetHwnd == 0:
     return
@@ -1523,7 +1521,6 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     unregisterThumbnail()
     unregisterHotkeys()
     destroyContextMenu()
-    saveStateOnClose()
     PostQuitMessage(0)
     return 0
   else:
@@ -1592,5 +1589,3 @@ proc runOverlayLoop*() =
       continue
     discard TranslateMessage(addr msg)
     discard DispatchMessageW(addr msg)
-
-  saveStateOnClose()

@@ -8,6 +8,9 @@ import ../picker/cli
 import overlay
 
 proc selectInitialTarget(cfg: var OverlayConfig): HWND =
+  if cfg.targetHwnd == 0 and cfg.targetTitle.len == 0:
+    return 0
+
   let opts = eligibilityOptions(cfg)
   let matchedIdentity = findWindowByIdentity(cfg, opts)
   if matchedIdentity.isSome:

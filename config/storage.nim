@@ -3,6 +3,9 @@
 import std/[json, os]
 
 const
+  persistOverlayConfig = false
+
+const
   configFileName = "overlay_config.json"
   invalidCoord = -1
 
@@ -75,6 +78,9 @@ proc configPath*(): string =
 
 ## Reads configuration from disk, falling back to defaults on missing or invalid files.
 proc loadOverlayConfig*(): OverlayConfig =
+  if not persistOverlayConfig:
+    return defaultOverlayConfig()
+
   let path = configPath()
   if fileExists(path):
     try:
@@ -110,6 +116,9 @@ proc loadOverlayConfig*(): OverlayConfig =
 
 ## Writes the provided configuration object back to disk as JSON.
 proc saveOverlayConfig*(cfg: OverlayConfig) =
+  if not persistOverlayConfig:
+    return
+
   let node = %*{
     "x": cfg.x,
     "y": cfg.y,
