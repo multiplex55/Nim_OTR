@@ -602,17 +602,27 @@ proc captureBaseStyles(hwnd: HWND) =
   if appState.baseExStyle == 0:
     appState.baseExStyle = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
 
-proc currentStyle(hwnd: HWND): DWORD =
-  let visibleFlags = if hwnd != 0: DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE)) and WS_VISIBLE else: DWORD(0)
-  let baseStyle = (if appState.baseStyle != 0: appState.baseStyle else: styleStandard) or visibleFlags
-  if appState.cfg.borderless:
-    baseStyle and not WS_CAPTION and not WS_SYSMENU
+proc visibleStyleFlags(hwnd: HWND): DWORD =
+  let current = DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE))
+  let isVisible = IsWindowVisible(hwnd) != 0
+  let currentVisible = current and WS_VISIBLE
+  if isVisible and currentVisible == 0:
+    WS_VISIBLE
   else:
-    baseStyle
+    currentVisible
+
+proc currentStyle(hwnd: HWND): DWORD =
+  let baseFlags = if appState.baseStyle != 0: appState.baseStyle else: styleStandard
+  let style = baseFlags or visibleStyleFlags(hwnd)
+  if appState.cfg.borderless:
+    style and not WS_CAPTION and not WS_SYSMENU
+  else:
+    style
 
 proc applyWindowStyles(hwnd: HWND) =
   captureBaseStyles(hwnd)
 
+  let wasVisible = IsWindowVisible(hwnd) != 0
   let style = currentStyle(hwnd)
   discard SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR(style))
 
@@ -632,6 +642,9 @@ proc applyWindowStyles(hwnd: HWND) =
     0,
     SWP_NOMOVE or SWP_NOSIZE or SWP_FRAMECHANGED or SWP_NOACTIVATE
   )
+
+  if wasVisible:
+    discard ShowWindow(hwnd, SW_SHOWNOACTIVATE)
 
 proc setClientSize(hwnd: HWND; clientWidth, clientHeight: int) =
   var rect = RECT(left: 0, top: 0, right: LONG(clientWidth), bottom: LONG(clientHeight))
