@@ -233,6 +233,14 @@ proc invalidatePreviewRect(rect: Option[RECT]) =
 
   var bounds = rect.get()
   discard InvalidateRect(appState.hwnd, addr bounds, FALSE)
+  ## Ensure the overlay repaints immediately so the preview is composed
+  ## above the thumbnail surface.
+  discard RedrawWindow(
+    appState.hwnd,
+    nil,
+    0,
+    RDW_INVALIDATE or RDW_UPDATENOW or RDW_NOCHILDREN
+  )
 
 proc refreshDragPreview() =
   let preview = selectionPreviewRect()
