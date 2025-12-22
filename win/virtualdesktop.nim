@@ -4,10 +4,10 @@ import winim/lean
 ## Based on IVirtualDesktopManager documentation.
 
 const
-  CLSID_VirtualDesktopManager* = GUID(Data1: 0xAA509086'u32, Data2: 0x5CA9'u16,
+  CLSID_VirtualDesktopManager* = GUID(Data1: 0xAA509086'i32, Data2: 0x5CA9'u16,
       Data3: 0x4C25'u16, Data4: [0x8F'u8, 0x95, 0x58, 0x9D, 0x3C, 0x07, 0xB4,
           0x8A])
-  IID_IVirtualDesktopManager* = GUID(Data1: 0xA5CD92FF'u32, Data2: 0x29BE'u16,
+  IID_IVirtualDesktopManager* = GUID(Data1: 0xA5CD92FF'i32, Data2: 0x29BE'u16,
       Data3: 0x454C'u16, Data4: [0x8D'u8, 0x04, 0xD8, 0x28, 0x79, 0xFB, 0x3F,
           0x1B])
 
