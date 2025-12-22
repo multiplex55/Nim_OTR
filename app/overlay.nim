@@ -11,12 +11,16 @@ import ../picker/core
 proc clientRect(hwnd: HWND): RECT
 proc updateThumbnailProperties()
 proc overlayDestinationRect(): IntRect
+proc updateStatusText()
+proc boolLabel(flag: bool): string
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
 proc setCrop*(rect: RECT)
+proc setCropFromOverlayRect*(rect: RECT)
 proc resetCrop*()
 proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
+proc restoreAndFocusTarget()
 
 const
   className = L"NimOTROverlayClass"
@@ -27,7 +31,8 @@ const
   idEditCrop = 1003
   idResetCrop = 1004
   idShowDebugInfo = 1005
-  idExit = 1006
+  idMouseCrop = 1006
+  idExit = 1007
 
   idCropLeft = 2001
   idCropTop = 2002
@@ -44,7 +49,9 @@ const
   styleStandard = WS_OVERLAPPEDWINDOW
   styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
   exStyleLayered = WS_EX_LAYERED
+  minSelectionSize = 8
   VK_SHIFT = 0x10
+  VK_ESCAPE = 0x1B
   HTTRANSPARENT = -1
   SW_RESTORE = 9
   validationTimerId = 2001
@@ -65,13 +72,14 @@ let
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelCrop = L"Crop…"
+  menuLabelMouseCrop = L"Mouse Crop"
   menuLabelResetCrop = L"Reset Crop"
   menuLabelDebugInfo = L"Debug Info"
   menuLabelExit = L"Exit"
 
   cropDialogClass = L"NimOTRCropDialog"
-  cropDialogWidth = 280
-  cropDialogHeight = 210
+  cropDialogWidth = 320
+  cropDialogHeight = 240
 
 type
   CropDialogState = object
@@ -80,6 +88,8 @@ type
     editTop: HWND
     editWidth: HWND
     editHeight: HWND
+    applyButton: HWND
+    resetButton: HWND
 
   WindowIdentity = object
     hwnd: HWND
@@ -106,11 +116,17 @@ type
     clickThroughEnabled: bool
     selectingTarget: bool
     statusText: string
+    dragSelecting: bool
+    dragStart: POINT
+    dragCurrent: POINT
+    mouseCropEnabled: bool
+    lastDragBlockReason: string
+    lastDragPreview: Option[RECT]
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
-  clickThroughEnabled: true
+  clickThroughEnabled: false
 )
 
 proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
@@ -135,8 +151,233 @@ proc toWinRect(rect: IntRect): RECT =
     bottom: LONG(rect.bottom)
   )
 
+proc toPoint(x, y: int32): POINT =
+  POINT(x: LONG(x), y: LONG(y))
+
+proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
+proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
+proc hiWord(value: WPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
+proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
+
+proc shiftHeld(): bool =
+  (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
+
 proc rectEquals(a, b: RECT): bool =
   a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom
+
+proc rectWidth(rect: RECT): int =
+  (rect.right - rect.left).int
+
+proc rectHeight(rect: RECT): int =
+  (rect.bottom - rect.top).int
+
+proc clampPointToRect(point: POINT; bounds: RECT): POINT =
+  POINT(
+    x: max(bounds.left, min(point.x, bounds.right)),
+    y: max(bounds.top, min(point.y, bounds.bottom))
+  )
+
+proc selectionBounds(): Option[RECT] =
+  let bounds = overlayDestinationRect().toWinRect
+  if rectWidth(bounds) <= 0 or rectHeight(bounds) <= 0:
+    return
+  some(bounds)
+
+proc selectionPreviewRect(): Option[RECT] =
+  if not appState.dragSelecting:
+    return
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    return
+
+  let clampedStart = clampPointToRect(appState.dragStart, bounds.get())
+  let clampedCurrent = clampPointToRect(appState.dragCurrent, bounds.get())
+
+  some(RECT(
+    left: min(clampedStart.x, clampedCurrent.x),
+    top: min(clampedStart.y, clampedCurrent.y),
+    right: max(clampedStart.x, clampedCurrent.x),
+    bottom: max(clampedStart.y, clampedCurrent.y)
+  ))
+
+proc cropDialogVisible(): bool =
+  appState.cropDialog.hwnd != 0 and IsWindowVisible(appState.cropDialog.hwnd) != 0
+
+proc dragSelectionAllowed(reason: var string): bool =
+  if appState.targetHwnd == 0:
+    reason = "no_target"
+    return false
+
+  if not appState.mouseCropEnabled:
+    reason = "mouse_crop_disabled"
+    return false
+
+  appState.lastDragBlockReason = ""
+  reason = "ok"
+  true
+
+proc clearDragPreview() =
+  if appState.lastDragPreview.isNone:
+    return
+
+  let hdc = GetWindowDC(appState.hwnd)
+  if hdc != 0:
+    let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+    let oldPen = SelectObject(hdc, pen)
+    let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
+    let oldRop = SetROP2(hdc, R2_NOTXORPEN)
+    let rect = appState.lastDragPreview.get()
+    discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+    discard SetROP2(hdc, oldRop)
+    discard SelectObject(hdc, oldPen)
+    discard SelectObject(hdc, oldBrush)
+    discard DeleteObject(pen)
+    discard ReleaseDC(appState.hwnd, hdc)
+
+  appState.lastDragPreview = none(RECT)
+
+proc drawDragPreview(rect: RECT) =
+  let hdc = GetWindowDC(appState.hwnd)
+  if hdc == 0:
+    return
+
+  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+  let oldPen = SelectObject(hdc, pen)
+  let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
+  let oldRop = SetROP2(hdc, R2_NOTXORPEN)
+
+  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+
+  discard SetROP2(hdc, oldRop)
+  discard SelectObject(hdc, oldPen)
+  discard SelectObject(hdc, oldBrush)
+  discard DeleteObject(pen)
+  discard ReleaseDC(appState.hwnd, hdc)
+
+proc refreshDragPreview() =
+  let preview = selectionPreviewRect()
+  if preview.isNone:
+    clearDragPreview()
+    return
+
+  if appState.lastDragPreview.isSome:
+    drawDragPreview(appState.lastDragPreview.get())
+
+  drawDragPreview(preview.get())
+  appState.lastDragPreview = some(preview.get())
+
+proc clearDragSelection(invalidate: bool = true) =
+  appState.dragSelecting = false
+  appState.dragStart = POINT()
+  appState.dragCurrent = POINT()
+  clearDragPreview()
+  updateStatusText()
+  if invalidate and appState.hwnd != 0:
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+
+proc cancelDragSelection() =
+  if not appState.dragSelecting:
+    return
+  if GetCapture() == appState.hwnd:
+    discard ReleaseCapture()
+  clearDragSelection()
+
+proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
+  var reason = ""
+  if not dragSelectionAllowed(reason):
+    appState.lastDragBlockReason = reason
+    logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*reason)])
+    return false
+
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    appState.lastDragBlockReason = "no_bounds"
+    logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*"no_bounds")])
+    return false
+
+  var start = toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam)))
+  start = clampPointToRect(start, bounds.get())
+
+  appState.dragSelecting = true
+  appState.dragStart = start
+  appState.dragCurrent = start
+  appState.lastDragBlockReason = ""
+  updateStatusText()
+  discard SetCapture(hwnd)
+  refreshDragPreview()
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"begin"),
+      ("result", %*"started"),
+      ("x", %*int(start.x)),
+      ("y", %*int(start.y))
+    ]
+  )
+  true
+
+proc updateDragSelection(lParam: LPARAM): bool =
+  if not appState.dragSelecting:
+    return false
+
+  let bounds = selectionBounds()
+  if bounds.isNone:
+    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"blocked"), ("reason", %*"no_bounds")])
+    return true
+
+  let nextPoint = clampPointToRect(toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam))), bounds.get())
+  if nextPoint.x != appState.dragCurrent.x or nextPoint.y != appState.dragCurrent.y:
+    appState.dragCurrent = nextPoint
+    refreshDragPreview()
+  true
+
+proc finalizeDragSelection(): bool =
+  if not appState.dragSelecting:
+    return false
+
+  if GetCapture() == appState.hwnd:
+    discard ReleaseCapture()
+
+  let preview = selectionPreviewRect()
+  clearDragSelection(false)
+
+  if preview.isNone:
+    appState.lastDragBlockReason = "no_preview"
+    logEvent("mouse_crop", [("action", %*"finalize"), ("result", %*"no_preview")])
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+    return true
+
+  let rect = preview.get()
+  if rectWidth(rect) < minSelectionSize or rectHeight(rect) < minSelectionSize:
+    appState.lastDragBlockReason = "too_small"
+    logEvent(
+      "mouse_crop",
+      [
+        ("action", %*"finalize"),
+        ("result", %*"too_small"),
+        ("width", %*rectWidth(rect)),
+        ("height", %*rectHeight(rect))
+      ]
+    )
+    if shiftHeld():
+      restoreAndFocusTarget()
+    discard InvalidateRect(appState.hwnd, nil, FALSE)
+    return true
+
+  setCropFromOverlayRect(rect)
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"finalize"),
+      ("result", %*"applied"),
+      ("left", %*int(rect.left)),
+      ("top", %*int(rect.top)),
+      ("right", %*int(rect.right)),
+      ("bottom", %*int(rect.bottom))
+    ]
+  )
+  discard InvalidateRect(appState.hwnd, nil, FALSE)
+  true
 
 proc saveCropToConfig(rect: RECT; active: bool) =
   let width = (rect.right - rect.left).int
@@ -203,14 +444,6 @@ proc updateCropDialogFields() =
   setEditText(appState.cropDialog.editTop, rect.top.int)
   setEditText(appState.cropDialog.editWidth, width)
   setEditText(appState.cropDialog.editHeight, height)
-
-proc loWord(value: WPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
-proc loWordL(value: LPARAM): UINT {.inline.} = UINT(value and 0xFFFF)
-proc hiWord(value: WPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
-proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
-
-proc shiftHeld(): bool =
-  (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
 
 proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
   let procInfo = processIdentity(hwnd, "")
@@ -295,6 +528,7 @@ proc createContextMenu() =
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
+  discard AppendMenuW(menu, menuTopFlags, idMouseCrop, menuLabelMouseCrop)
   discard AppendMenuW(menu, menuTopFlags, idResetCrop, menuLabelResetCrop)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
@@ -311,6 +545,29 @@ proc updateContextMenuChecks() =
 
   let borderFlags: UINT = UINT(if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
+
+  let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
+  discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
+
+proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
+  if appState.mouseCropEnabled == enabled:
+    return
+  appState.mouseCropEnabled = enabled
+  if enabled and appState.clickThroughEnabled:
+    appState.clickThroughEnabled = false
+  if not enabled:
+    cancelDragSelection()
+  updateContextMenuChecks()
+  updateStatusText()
+  logEvent(
+    "mouse_crop",
+    [
+      ("action", %*"mode_toggle"),
+      ("enabled", %*enabled),
+      ("source", %*source),
+      ("clickThrough", %*appState.clickThroughEnabled)
+    ]
+  )
 
 proc destroyContextMenu() =
   if appState.contextMenu == 0:
@@ -490,7 +747,14 @@ proc computeStatusText(): string =
   if appState.thumbnailSuppressed:
     return "Source is minimized or hidden. Restore it or " & selectAction
 
-  ""
+  var status = ""
+  if appState.mouseCropEnabled or cropDialogVisible():
+    let dragState = if appState.dragSelecting: "Dragging selection…" else: "Mouse crop enabled. Drag to select a region."
+    let clickState = if appState.clickThroughEnabled: "Click-through temporarily ignored while cropping." else: "Click-through off."
+    status = dragState & " " & clickState & " ESC cancels."
+  elif appState.targetHwnd != 0:
+    status = "Mouse crop off. Right-click → Mouse Crop to drag a selection."
+  status
 
 proc rectDescription(rect: RECT): string =
   "L:" & $rect.left & " T:" & $rect.top & " R:" & $rect.right & " B:" & $rect.bottom
@@ -520,6 +784,25 @@ proc showDebugInfo() =
   let crop = currentCropRect()
   lines.add("Crop: " & rectDescription(crop))
   lines.add("Opacity: " & $int(appState.opacity))
+  lines.add("Mouse Crop Enabled: " & boolLabel(appState.mouseCropEnabled))
+  lines.add("Drag Selecting: " & boolLabel(appState.dragSelecting))
+  lines.add("Click-through Enabled: " & boolLabel(appState.clickThroughEnabled))
+  lines.add("Drag Block Reason: " & (if appState.lastDragBlockReason.len > 0: appState.lastDragBlockReason else: "None"))
+  lines.add("Crop Dialog Visible: " & boolLabel(cropDialogVisible()))
+  let captureOwner = GetCapture()
+  lines.add("Has Capture: " & boolLabel(captureOwner == appState.hwnd) &
+      " (owner: 0x" & toHex(int(captureOwner), 8) & ")")
+  let foreground = GetForegroundWindow()
+  lines.add(
+    "Foreground: 0x" & toHex(int(foreground), 8) &
+    " (overlay: " & boolLabel(foreground == appState.hwnd) &
+    ", crop dialog: " & boolLabel(foreground == appState.cropDialog.hwnd) & ")"
+  )
+  if appState.dragSelecting:
+    lines.add(
+      "Drag Start: " & $appState.dragStart.x & "," & $appState.dragStart.y &
+      " Current: " & $appState.dragCurrent.x & "," & $appState.dragCurrent.y
+    )
 
   discard MessageBoxW(
     appState.hwnd,
@@ -534,6 +817,24 @@ proc updateStatusText() =
     appState.statusText = nextStatus
     invalidateStatus()
 
+proc drawSelectionPreview(hdc: HDC) =
+  let preview = selectionPreviewRect()
+  if preview.isNone:
+    return
+
+  let rect = preview.get()
+  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+  let brush = CreateHatchBrush(HS_DIAGCROSS, RGB(0, 120, 215))
+  let oldPen = SelectObject(hdc, pen)
+  let oldBrush = SelectObject(hdc, brush)
+
+  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+
+  discard SelectObject(hdc, oldPen)
+  discard SelectObject(hdc, oldBrush)
+  discard DeleteObject(pen)
+  discard DeleteObject(brush)
+
 proc paintStatus(hwnd: HWND) =
   var ps: PAINTSTRUCT
   let hdc = BeginPaint(hwnd, addr ps)
@@ -541,20 +842,20 @@ proc paintStatus(hwnd: HWND) =
     discard EndPaint(hwnd, addr ps)
 
   let status = appState.statusText
-  if status.len == 0:
-    return
+  if status.len > 0:
+    var rect = clientRect(hwnd)
+    discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
+    discard SetBkMode(hdc, TRANSPARENT)
+    discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
+    discard DrawTextW(
+      hdc,
+      status.newWideCString,
+      -1,
+      addr rect,
+      DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
+    )
 
-  var rect = clientRect(hwnd)
-  discard FillRect(hdc, addr rect, cast[HBRUSH](COLOR_WINDOW + 1))
-  discard SetBkMode(hdc, TRANSPARENT)
-  discard SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT))
-  discard DrawTextW(
-    hdc,
-    status.newWideCString,
-    -1,
-    addr rect,
-    DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
-  )
+  drawSelectionPreview(hdc)
 
 proc detachTarget(promptUser: bool) =
   if appState.thumbnail != 0:
@@ -687,7 +988,7 @@ proc registerThumbnail(target: HWND) =
 
 proc mapOverlayToSource(overlayRect: RECT): RECT =
   let destRect = overlayDestinationRect()
-  let sourceRect = clientRect(appState.targetHwnd).toIntRect
+  let sourceRect = currentCropRect().toIntRect
   mapRectToSource(overlayRect.toIntRect, destRect, sourceRect).toWinRect
 
 proc refreshCropForSourceResize(newClient: RECT) =
@@ -808,6 +1109,8 @@ proc initCropDialogControls(hwnd: HWND) =
     nil
   )
   setControlFont(applyBtn)
+  appState.cropDialog.applyButton = applyBtn
+  discard SendMessageW(appState.cropDialog.applyButton, BM_SETSTYLE, WPARAM(BS_DEFPUSHBUTTON), LPARAM(TRUE))
 
   let resetBtn = CreateWindowExW(
     0,
@@ -824,6 +1127,8 @@ proc initCropDialogControls(hwnd: HWND) =
     nil
   )
   setControlFont(resetBtn)
+  appState.cropDialog.resetButton = resetBtn
+  discard SendMessageW(appState.cropDialog.resetButton, BM_SETSTYLE, WPARAM(BS_PUSHBUTTON), LPARAM(TRUE))
 
 proc showCropValidation(message: string) =
   discard MessageBoxW(
@@ -882,12 +1187,17 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
     else:
       discard
     return 0
+  of WM_KEYDOWN:
+    if int32(wParam) == VK_RETURN:
+      applyCropFromDialog()
+      return 0
   of WM_CLOSE:
     discard DestroyWindow(hwnd)
     return 0
   of WM_DESTROY:
     if appState.cropDialog.hwnd == hwnd:
       appState.cropDialog = CropDialogState()
+      updateStatusText()
     return 0
   else:
     discard
@@ -903,7 +1213,7 @@ proc showCropDialog() =
     return
 
   let hwnd = CreateWindowExW(
-    WS_EX_TOOLWINDOW,
+    WS_EX_TOOLWINDOW or WS_EX_CONTROLPARENT,
     cropDialogClass,
     L"Crop",
     WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
@@ -920,6 +1230,7 @@ proc showCropDialog() =
   if hwnd != 0:
     discard ShowWindow(hwnd, SW_SHOWNORMAL)
     discard UpdateWindow(hwnd)
+    discard SetForegroundWindow(hwnd)
 
 ## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
@@ -1036,7 +1347,12 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     appState.cfg.borderless = not appState.cfg.borderless
     applyWindowStyles(hwnd)
   of idEditCrop:
+    setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
+  of idMouseCrop:
+    setMouseCropEnabled(not appState.mouseCropEnabled)
+    if appState.mouseCropEnabled:
+      showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
   of idShowDebugInfo:
@@ -1047,6 +1363,9 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     discard
 
 proc handleContextMenu(hwnd: HWND, lParam: LPARAM) =
+  if appState.dragSelecting:
+    cancelDragSelection()
+
   createContextMenu()
   updateContextMenuChecks()
   if appState.contextMenu == 0:
@@ -1104,21 +1423,41 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_CONTEXTMENU:
     handleContextMenu(hwnd, lParam)
     return 0
+  of WM_RBUTTONDOWN:
+    if shiftHeld():
+      if appState.mouseCropEnabled:
+        logEvent("mouse_crop", [("action", %*"clickthrough_toggle"), ("result", %*"ignored_in_crop_mode")])
+      else:
+        appState.clickThroughEnabled = not appState.clickThroughEnabled
+        updateStatusText()
+      return 0
   of WM_PAINT:
     paintStatus(hwnd)
     return 0
+  of WM_MOUSEMOVE:
+    if updateDragSelection(lParam):
+      return 0
   of WM_NCHITTEST:
     let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
-    if appState.clickThroughEnabled and not shiftHeld() and hit == HTCLIENT:
+    if appState.clickThroughEnabled and not appState.mouseCropEnabled and not appState.dragSelecting and not shiftHeld() and hit == HTCLIENT:
       return HTTRANSPARENT
     return hit
   of WM_LBUTTONDOWN:
-    if shiftHeld():
+    if beginDragSelection(hwnd, lParam):
+      return 0
+    if shiftHeld() and not appState.mouseCropEnabled:
       restoreAndFocusTarget()
     return DefWindowProcW(hwnd, msg, wParam, lParam)
+  of WM_LBUTTONUP:
+    if finalizeDragSelection():
+      return 0
   of WM_TIMER:
     if wParam == validationTimerId:
       validateTargetState()
+      return 0
+  of WM_KEYDOWN:
+    if int32(wParam) == VK_ESCAPE:
+      cancelDragSelection()
       return 0
   of WM_DESTROY:
     stopValidationTimer()
@@ -1190,6 +1529,8 @@ proc runOverlayLoop*() =
 
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
+    if appState.cropDialog.hwnd != 0 and IsDialogMessageW(appState.cropDialog.hwnd, addr msg) != 0:
+      continue
     discard TranslateMessage(addr msg)
     discard DispatchMessageW(addr msg)
 
