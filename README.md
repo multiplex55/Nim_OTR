@@ -24,6 +24,11 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 - Press `Reset Crop` in the context menu (or the crop dialog) to clear the selection back to the full source window.
 - Press Shift + right-click on the overlay to toggle click-through mode when you need to interact with the underlying window; while **Mouse Crop** is enabled, this toggle is ignored so dragging remains interactive.
 
+## Manual Validation
+1. Create a second Windows virtual desktop and place an application window on each desktop.
+2. Run `nim c -r picker/cli.nim` and confirm both windows are listed with their `Desktop=<GUID>` labels.
+3. Start the overlay (`nimble build app/overlay`), press `Ctrl+Shift+P`, and pick the window that lives on the non-current desktop; the selection log should include its virtual desktop GUID.
+
 ## Formatting
 Format Nim sources before committing:
 

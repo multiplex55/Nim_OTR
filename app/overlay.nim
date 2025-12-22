@@ -2,7 +2,7 @@
 import std/[json, options, strutils, math]
 import winim/lean
 import ../config/storage
-import ../util/[geometry, winutils]
+import ../util/[geometry, virtualdesktop, winutils]
 import ../util/logger
 import ../win/dwmapi
 import ../picker/core
@@ -454,6 +454,22 @@ proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
     processPath: procInfo.path
   )
 
+proc windowDesktopLabel(hwnd: HWND): string =
+  var desktopManager = initVirtualDesktopManager()
+  var desktopManagerPtr: ptr VirtualDesktopManager = nil
+  if desktopManager.valid:
+    desktopManagerPtr = addr desktopManager
+
+  let id = windowDesktopId(desktopManagerPtr, hwnd)
+  let label =
+    if id.isSome:
+      formatDesktopId(id.get())
+    else:
+      "unknown"
+
+  shutdown(desktopManager)
+  label
+
 proc processMatches(cfg: OverlayConfig; winProcess: string; winPath: string): bool =
   if cfg.targetProcessPath.len > 0:
     return cmpIgnoreCase(winPath, cfg.targetProcessPath) == 0
@@ -486,7 +502,7 @@ proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
     return
 
   if not shouldIncludeWindow(stored, opts):
-    if not shouldIncludeWindow(stored, opts, false):
+    if not shouldIncludeWindow(stored, opts, nil, false):
       return
 
   let identity = collectWindowIdentity(stored)
@@ -1332,6 +1348,12 @@ proc selectTarget() =
   let selection = clickToPickWindow(currentEligibilityOptions())
   if selection.isSome:
     let win = selection.get()
+    logEvent("selection", [
+      ("status", %*"chosen"),
+      ("title", %*win.title),
+      ("process", %*win.processName),
+      ("virtual_desktop", %*windowDesktopLabel(win.hwnd))
+    ])
     setTargetWindow(win.hwnd)
   else:
     logEvent("selection", [("status", %*"cancelled")])
