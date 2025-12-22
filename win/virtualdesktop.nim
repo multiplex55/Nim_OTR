@@ -1,4 +1,5 @@
 import winim/lean
+import winim/com
 
 ## COM bindings for the Windows Virtual Desktop Manager.
 ## Based on IVirtualDesktopManager documentation.
