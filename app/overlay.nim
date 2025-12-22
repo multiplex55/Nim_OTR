@@ -16,6 +16,9 @@ proc boolLabel(flag: bool): string
 proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
+proc createSelectionOverlayWindow(): HWND
+proc updateSelectionOverlayBounds()
+proc selectionOverlayWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
 proc setCrop*(rect: RECT)
 proc setCropFromOverlayRect*(rect: RECT)
 proc resetCrop*()
@@ -25,6 +28,7 @@ proc restoreAndFocusTarget()
 const
   className = L"NimOTROverlayClass"
   overlayTitle = L"Nim OTR Overlay"
+  selectionOverlayClassName = L"NimOTRSelectionOverlayClass"
   idSelectWindow = 1000
   idToggleTopMost = 1001
   idToggleBorderless = 1002
@@ -51,6 +55,7 @@ const
   styleStandard = WS_OVERLAPPEDWINDOW
   exStyleLayered = WS_EX_LAYERED
   minSelectionSize = 8
+  selectionOverlayColorKey = COLORREF(0x00FF00)
   VK_SHIFT = 0x10
   VK_ESCAPE = 0x1B
   HTTRANSPARENT = -1
@@ -131,6 +136,7 @@ type
     baseExStyle: DWORD
     windowSelectionMenu: HMENU
     windowMenuItems: seq[HWND]
+    selectionOverlay: HWND
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -227,63 +233,73 @@ proc dragSelectionAllowed(reason: var string): bool =
   reason = "ok"
   true
 
-proc clearDragPreview() =
-  if appState.lastDragPreview.isNone:
+proc overlayClientOffset(): POINT =
+  var offset = POINT()
+  if appState.hwnd == 0:
+    return offset
+
+  var windowRect: RECT
+  if GetWindowRect(appState.hwnd, addr windowRect) == 0:
+    return offset
+
+  var clientOrigin = POINT()
+  if ClientToScreen(appState.hwnd, addr clientOrigin) == 0:
+    return offset
+
+  POINT(
+    x: clientOrigin.x - windowRect.left,
+    y: clientOrigin.y - windowRect.top
+  )
+
+proc invalidatePreviewRect(rect: Option[RECT]) =
+  if appState.selectionOverlay == 0 or rect.isNone:
     return
 
-  let hdc = GetWindowDC(appState.hwnd)
-  if hdc != 0:
-    let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
-    let oldPen = SelectObject(hdc, pen)
-    let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
-    let oldRop = SetROP2(hdc, R2_NOTXORPEN)
-    let rect = appState.lastDragPreview.get()
-    discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
-    discard SetROP2(hdc, oldRop)
-    discard SelectObject(hdc, oldPen)
-    discard SelectObject(hdc, oldBrush)
-    discard DeleteObject(pen)
-    discard ReleaseDC(appState.hwnd, hdc)
+  var bounds = rect.get()
+  let offset = overlayClientOffset()
+  discard OffsetRect(addr bounds, offset.x, offset.y)
 
-  appState.lastDragPreview = none(RECT)
+  discard InvalidateRect(appState.selectionOverlay, addr bounds, TRUE)
+  discard RedrawWindow(
+    appState.selectionOverlay,
+    nil,
+    0,
+    RDW_INVALIDATE or RDW_UPDATENOW or RDW_NOCHILDREN
+  )
 
-proc drawDragPreview(rect: RECT) =
-  let hdc = GetWindowDC(appState.hwnd)
-  if hdc == 0:
-    return
-
-  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+proc drawPreviewRect(hdc: HDC; rect: RECT) =
+  discard SetBkMode(hdc, TRANSPARENT)
+  let pen = CreatePen(PS_SOLID, 3, RGB(0, 120, 215))
+  let brush = GetStockObject(NULL_BRUSH)
   let oldPen = SelectObject(hdc, pen)
-  let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
-  let oldRop = SetROP2(hdc, R2_NOTXORPEN)
+  let oldBrush = SelectObject(hdc, brush)
 
   discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
 
-  discard SetROP2(hdc, oldRop)
   discard SelectObject(hdc, oldPen)
   discard SelectObject(hdc, oldBrush)
   discard DeleteObject(pen)
-  discard ReleaseDC(appState.hwnd, hdc)
 
 proc refreshDragPreview() =
   let preview = selectionPreviewRect()
-  if preview.isNone:
-    clearDragPreview()
-    return
+  let previous = appState.lastDragPreview
+  appState.lastDragPreview = preview
 
-  if appState.lastDragPreview.isSome:
-    drawDragPreview(appState.lastDragPreview.get())
+  if previous.isSome:
+    invalidatePreviewRect(previous)
 
-  drawDragPreview(preview.get())
-  appState.lastDragPreview = some(preview.get())
+  if preview.isSome and (previous.isNone or not rectEquals(previous.get(), preview.get())):
+    invalidatePreviewRect(preview)
 
 proc clearDragSelection(invalidate: bool = true) =
+  let lastPreview = appState.lastDragPreview
   appState.dragSelecting = false
   appState.dragStart = POINT()
   appState.dragCurrent = POINT()
-  clearDragPreview()
+  appState.lastDragPreview = none(RECT)
   updateStatusText()
   if invalidate and appState.hwnd != 0:
+    invalidatePreviewRect(lastPreview)
     discard InvalidateRect(appState.hwnd, nil, FALSE)
 
 proc cancelDragSelection() =
@@ -673,6 +689,21 @@ proc updateContextMenuChecks() =
   let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
 
+proc showSelectionOverlay() =
+  if appState.selectionOverlay == 0:
+    appState.selectionOverlay = createSelectionOverlayWindow()
+  if appState.selectionOverlay == 0:
+    return
+
+  updateSelectionOverlayBounds()
+  discard ShowWindow(appState.selectionOverlay, SW_SHOWNOACTIVATE)
+
+proc hideSelectionOverlay() =
+  if appState.selectionOverlay == 0:
+    return
+
+  discard ShowWindow(appState.selectionOverlay, SW_HIDE)
+
 proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
   if appState.mouseCropEnabled == enabled:
     return
@@ -681,6 +712,9 @@ proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
     appState.clickThroughEnabled = false
   if not enabled:
     cancelDragSelection()
+    hideSelectionOverlay()
+  else:
+    showSelectionOverlay()
   updateContextMenuChecks()
   updateStatusText()
   logEvent(
@@ -753,6 +787,7 @@ proc applyWindowStyles(hwnd: HWND) =
 
   if wasVisible:
     discard ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+  updateSelectionOverlayBounds()
 
 proc setClientSize(hwnd: HWND; clientWidth, clientHeight: int) =
   var rect = RECT(left: 0, top: 0, right: LONG(clientWidth), bottom: LONG(clientHeight))
@@ -785,10 +820,33 @@ proc setClientSize(hwnd: HWND; clientWidth, clientHeight: int) =
 proc handleSize(lParam: LPARAM) =
   appState.cfg.width = int(loWordL(lParam))
   appState.cfg.height = int(hiWordL(lParam))
+  updateSelectionOverlayBounds()
 
 proc handleMove(lParam: LPARAM) =
   appState.cfg.x = int(int16(loWordL(lParam)))
   appState.cfg.y = int(int16(hiWordL(lParam)))
+  updateSelectionOverlayBounds()
+
+proc updateSelectionOverlayBounds() =
+  if appState.selectionOverlay == 0 or appState.hwnd == 0:
+    return
+
+  var windowRect: RECT
+  if GetWindowRect(appState.hwnd, addr windowRect) == 0:
+    return
+
+  let width = windowRect.right - windowRect.left
+  let height = windowRect.bottom - windowRect.top
+
+  discard SetWindowPos(
+    appState.selectionOverlay,
+    appState.hwnd,
+    windowRect.left,
+    windowRect.top,
+    width,
+    height,
+    SWP_NOACTIVATE
+  )
 
 proc overlayDestinationRect(): IntRect =
   let client = clientRect(appState.hwnd).toIntRect
@@ -976,23 +1034,14 @@ proc updateStatusText() =
     appState.statusText = nextStatus
     invalidateStatus()
 
-proc drawSelectionPreview(hdc: HDC) =
+proc drawSelectionPreview(hdc: HDC; offset: POINT = POINT()) =
   let preview = selectionPreviewRect()
   if preview.isNone:
     return
 
-  let rect = preview.get()
-  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
-  let brush = CreateHatchBrush(HS_DIAGCROSS, RGB(0, 120, 215))
-  let oldPen = SelectObject(hdc, pen)
-  let oldBrush = SelectObject(hdc, brush)
-
-  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
-
-  discard SelectObject(hdc, oldPen)
-  discard SelectObject(hdc, oldBrush)
-  discard DeleteObject(pen)
-  discard DeleteObject(brush)
+  var rect = preview.get()
+  discard OffsetRect(addr rect, offset.x, offset.y)
+  drawPreviewRect(hdc, rect)
 
 proc paintStatus(hwnd: HWND) =
   var ps: PAINTSTRUCT
@@ -1015,7 +1064,63 @@ proc paintStatus(hwnd: HWND) =
       DT_CENTER or DT_VCENTER or DT_WORDBREAK or DT_NOPREFIX
     )
 
-  drawSelectionPreview(hdc)
+proc createSelectionOverlayWindow(): HWND =
+  var wc: WNDCLASSEXW
+  wc.cbSize = sizeof(WNDCLASSEXW).UINT
+  wc.style = CS_HREDRAW or CS_VREDRAW
+  wc.lpfnWndProc = selectionOverlayWndProc
+  wc.hInstance = appState.hInstance
+  wc.hCursor = LoadCursorW(0, IDC_ARROW)
+  wc.hbrBackground = 0
+  wc.lpszClassName = selectionOverlayClassName
+
+  if RegisterClassExW(wc) == 0 and GetLastError() != ERROR_CLASS_ALREADY_EXISTS:
+    return 0
+
+  var windowRect: RECT
+  discard GetWindowRect(appState.hwnd, addr windowRect)
+
+  result = CreateWindowExW(
+    WS_EX_LAYERED or WS_EX_TRANSPARENT or WS_EX_NOACTIVATE or WS_EX_TOOLWINDOW,
+    selectionOverlayClassName,
+    nil,
+    WS_POPUP,
+    windowRect.left,
+    windowRect.top,
+    windowRect.right - windowRect.left,
+    windowRect.bottom - windowRect.top,
+    appState.hwnd,
+    0,
+    appState.hInstance,
+    nil
+  )
+
+  if result != 0:
+    discard SetLayeredWindowAttributes(result, selectionOverlayColorKey, 255, LWA_COLORKEY)
+    discard ShowWindow(result, SW_HIDE)
+
+proc selectionOverlayWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
+  case msg
+  of WM_NCHITTEST:
+    return HTTRANSPARENT
+  of WM_ERASEBKGND:
+    return 1
+  of WM_PAINT:
+    var ps: PAINTSTRUCT
+    let hdc = BeginPaint(hwnd, addr ps)
+    defer:
+      discard EndPaint(hwnd, addr ps)
+
+    var rect = clientRect(hwnd)
+    let bgBrush = CreateSolidBrush(selectionOverlayColorKey)
+    discard FillRect(hdc, addr rect, bgBrush)
+    discard DeleteObject(bgBrush)
+
+    drawSelectionPreview(hdc, overlayClientOffset())
+    return 0
+  else:
+    discard
+  result = DefWindowProcW(hwnd, msg, wParam, lParam)
 
 proc detachTarget(promptUser: bool) =
   if appState.thumbnail != 0:
@@ -1472,6 +1577,7 @@ proc handleDpiChanged(hwnd: HWND, lParam: LPARAM) =
     height,
     SWP_NOZORDER or SWP_NOACTIVATE
   )
+  updateSelectionOverlayBounds()
 
 proc registerHotkeys() =
   discard RegisterHotKey(appState.hwnd, hotkeySelectWindowId, MOD_CONTROL or MOD_SHIFT, VK_P)
@@ -1642,6 +1748,8 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     unregisterThumbnail()
     unregisterHotkeys()
     destroyContextMenu()
+    if appState.selectionOverlay != 0:
+      discard DestroyWindow(appState.selectionOverlay)
     PostQuitMessage(0)
     return 0
   else:
@@ -1690,6 +1798,9 @@ proc initOverlay*(cfg: OverlayConfig): bool =
   if appState.hwnd == 0:
     return false
 
+  appState.selectionOverlay = createSelectionOverlayWindow()
+  updateSelectionOverlayBounds()
+
   applyWindowStyles(appState.hwnd)
   applyWindowOpacity()
   registerHotkeys()
@@ -1697,6 +1808,9 @@ proc initOverlay*(cfg: OverlayConfig): bool =
   discard ShowWindow(appState.hwnd, SW_SHOWNORMAL)
   discard UpdateWindow(appState.hwnd)
   updateStatusText()
+
+  if appState.mouseCropEnabled:
+    showSelectionOverlay()
 
   result = true
 
