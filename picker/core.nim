@@ -101,9 +101,9 @@ proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
 
   let onCurrent =
     block:
-      let result = isOnCurrentDesktop(desktopManager, hwnd)
-      if result.isSome:
-        result.get()
+      let desktopCheck = isOnCurrentDesktop(desktopManager, hwnd)
+      if desktopCheck.isSome:
+        desktopCheck.get()
       else:
         true
   let visible = IsWindowVisible(hwnd) != 0
