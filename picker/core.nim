@@ -1,8 +1,9 @@
 ## Core picker utilities for enumerating and selecting windows without console I/O.
 
-import std/[options, strutils]
+import std/[options, sets, strutils]
 import winim/lean
 import ../util/winutils
+import ../util/virtualdesktop
 import ../win/dwmapi
 
 when not declared(SetROP2):
@@ -19,6 +20,7 @@ type
     title*: string
     processName*: string
     processPath*: string
+    desktopId*: Option[string]
 
   WindowEligibilityOptions* = object
     includeCloaked*: bool
@@ -27,6 +29,7 @@ type
     opts: ptr WindowEligibilityOptions
     strict: bool
     listPtr: ptr seq[WindowInfo]
+    desktopManager: ptr VirtualDesktopManager
 
 proc defaultEligibilityOptions*(): WindowEligibilityOptions =
   WindowEligibilityOptions(includeCloaked: false)
@@ -40,13 +43,18 @@ proc rootOwnerWindow(hwnd: HWND): HWND =
 proc processIdentity*(hwnd: HWND): tuple[name: string, path: string] {.inline.} =
   winutils.processIdentity(hwnd)
 
-proc collectWindowInfo(hwnd: HWND): WindowInfo =
+proc collectWindowInfo(hwnd: HWND; desktopManager: ptr VirtualDesktopManager = nil): WindowInfo =
   let procInfo = processIdentity(hwnd)
+  let desktopId = windowDesktopId(desktopManager, hwnd)
+  var desktopLabel: Option[string]
+  if desktopId.isSome:
+    desktopLabel = some(formatDesktopId(desktopId.get()))
   WindowInfo(
     hwnd: hwnd,
     title: windowTitle(hwnd),
     processName: procInfo.name,
-    processPath: procInfo.path
+    processPath: procInfo.path,
+    desktopId: desktopLabel
   )
 
 proc hasShellOwner(hwnd: HWND): bool =
@@ -79,14 +87,10 @@ proc hasTitle(hwnd: HWND): bool =
   title.strip.len > 0
 
 proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
-    strict: bool = true): bool =
+    desktopManager: ptr VirtualDesktopManager = nil; strict: bool = true): bool =
   if hwnd == 0:
     return false
-  if IsWindowVisible(hwnd) == 0:
-    return false
   if isToolWindow(hwnd):
-    return false
-  if not opts.includeCloaked and isCloaked(hwnd):
     return false
   if not hasTitle(hwnd):
     return false
@@ -94,6 +98,27 @@ proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
   let root = rootWindow(hwnd)
   if root != hwnd:
     return false
+
+  let onCurrent =
+    block:
+      let result = isOnCurrentDesktop(desktopManager, hwnd)
+      if result.isSome:
+        result.get()
+      else:
+        true
+  let visible = IsWindowVisible(hwnd) != 0
+  let cloaked = isCloaked(hwnd)
+
+  if onCurrent:
+    if not visible:
+      return false
+    if not opts.includeCloaked and cloaked:
+      return false
+  else:
+    if not opts.includeCloaked and cloaked:
+      discard
+    elif not visible:
+      return false
 
   if strict:
     if not hasVisibleRootOwner(hwnd):
@@ -103,14 +128,16 @@ proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
 
   true
 
-proc collectEligibleWindows(opts: WindowEligibilityOptions; strict: bool): seq[WindowInfo] =
+proc collectEligibleWindows(opts: WindowEligibilityOptions; strict: bool;
+    desktopManager: ptr VirtualDesktopManager): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
-  var context = EnumWindowsContext(opts: addr opts, strict: strict, listPtr: addr resultList)
+  var context = EnumWindowsContext(opts: addr opts, strict: strict, listPtr: addr resultList,
+      desktopManager: desktopManager)
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
     let ctx = cast[ptr EnumWindowsContext](lParam)
-    if shouldIncludeWindow(hwnd, ctx.opts[], ctx.strict):
-      ctx.listPtr[].add(collectWindowInfo(hwnd))
+    if shouldIncludeWindow(hwnd, ctx.opts[], ctx.desktopManager, ctx.strict):
+      ctx.listPtr[].add(collectWindowInfo(hwnd, ctx.desktopManager))
     1
 
   discard EnumWindows(callback, cast[LPARAM](addr context))
@@ -118,9 +145,27 @@ proc collectEligibleWindows(opts: WindowEligibilityOptions; strict: bool): seq[W
 
 ## Enumerates visible, eligible windows with a fallback to a relaxed filter.
 proc enumTopLevelWindows*(opts: WindowEligibilityOptions = defaultEligibilityOptions()): seq[WindowInfo] =
-  result = collectEligibleWindows(opts, true)
-  if result.len == 0:
-    result = collectEligibleWindows(opts, false)
+  var desktopManager = initVirtualDesktopManager()
+  var desktopManagerPtr: ptr VirtualDesktopManager = nil
+  if desktopManager.valid:
+    desktopManagerPtr = addr desktopManager
+
+  let strictList = collectEligibleWindows(opts, true, desktopManagerPtr)
+  let relaxedList = collectEligibleWindows(opts, false, desktopManagerPtr)
+
+  var seen = initHashSet[int]()
+  for win in strictList:
+    seen.incl(cast[int](win.hwnd))
+    result.add(win)
+
+  for win in relaxedList:
+    let hwndKey = cast[int](win.hwnd)
+    if seen.contains(hwndKey):
+      continue
+    seen.incl(hwndKey)
+    result.add(win)
+
+  shutdown(desktopManager)
 
 proc windowBounds*(hwnd: HWND): RECT =
   if hwnd == 0:
@@ -148,10 +193,10 @@ proc currentHoveredWindow(opts: WindowEligibilityOptions): HWND =
 
   proc resolveCandidate(source: HWND; strict: bool): HWND =
     let root = rootWindow(source)
-    if shouldIncludeWindow(root, opts, strict):
+    if shouldIncludeWindow(root, opts, strict = strict):
       return root
     let owner = rootOwnerWindow(root)
-    if owner != root and shouldIncludeWindow(owner, opts, strict):
+    if owner != root and shouldIncludeWindow(owner, opts, strict = strict):
       return owner
     0
 
@@ -192,7 +237,14 @@ proc clickToPick(opts: WindowEligibilityOptions): HWND =
 
 ## Click-to-pick helper that returns a chosen window without prompting via stdin.
 proc clickToPickWindow*(opts: WindowEligibilityOptions = defaultEligibilityOptions()): Option[WindowInfo] =
+  var desktopManager = initVirtualDesktopManager()
+  var desktopManagerPtr: ptr VirtualDesktopManager = nil
+  if desktopManager.valid:
+    desktopManagerPtr = addr desktopManager
+
   let hwnd = clickToPick(opts)
   if hwnd == 0:
+    shutdown(desktopManager)
     return
-  some(collectWindowInfo(hwnd))
+  result = some(collectWindowInfo(hwnd, desktopManagerPtr))
+  shutdown(desktopManager)

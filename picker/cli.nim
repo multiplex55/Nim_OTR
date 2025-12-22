@@ -8,7 +8,12 @@ proc printWindowList(windows: seq[WindowInfo]) =
   echo "Available windows:"
   for i, win in windows:
     let hwndHex = cast[int](win.hwnd).toHex.toUpperAscii()
-    echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}]"
+    let desktopLabel =
+      if win.desktopId.isSome:
+        &" Desktop={win.desktopId.get()}"
+      else:
+        ""
+    echo &"{i + 1}. {win.title} ({win.processName}) [HWND=0x{hwndHex}{desktopLabel}]"
 
 ## Interactive selection entry point that returns a chosen window, if any.
 proc pickWindow*(opts: WindowEligibilityOptions = defaultEligibilityOptions()): Option[WindowInfo] =
