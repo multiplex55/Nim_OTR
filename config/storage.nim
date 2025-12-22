@@ -18,6 +18,7 @@ type
     height*: int
     topMost*: bool
     borderless*: bool
+    lockAspect*: bool
     cropActive*: bool
     cropLeft*: int
     cropTop*: int
@@ -55,6 +56,7 @@ proc defaultOverlayConfig*(): OverlayConfig =
     height: 540,
     topMost: false,
     borderless: false,
+    lockAspect: false,
     cropActive: false,
     cropLeft: 0,
     cropTop: 0,
@@ -92,6 +94,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       readIntField(data, "height", result.height)
       readBoolField(data, "topMost", result.topMost)
       readBoolField(data, "borderless", result.borderless)
+      readBoolField(data, "lockAspect", result.lockAspect)
       readBoolField(data, "cropActive", result.cropActive)
       readIntField(data, "cropLeft", result.cropLeft)
       readIntField(data, "cropTop", result.cropTop)
@@ -126,6 +129,7 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "height": cfg.height,
     "topMost": cfg.topMost,
     "borderless": cfg.borderless,
+    "lockAspect": cfg.lockAspect,
     "cropActive": cfg.cropActive,
     "cropLeft": cfg.cropLeft,
     "cropTop": cfg.cropTop,
