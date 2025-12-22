@@ -242,6 +242,27 @@ proc invalidatePreviewRect(rect: Option[RECT]) =
     RDW_INVALIDATE or RDW_UPDATENOW or RDW_NOCHILDREN
   )
 
+proc drawPreviewOverlay(rect: RECT) =
+  ## Draw the preview directly to the window DC so it appears above the
+  ## mirrored thumbnail while retaining the normal paint pipeline for
+  ## clearing/refreshing.
+  let hdc = GetWindowDC(appState.hwnd)
+  if hdc == 0:
+    return
+
+  discard SetBkMode(hdc, TRANSPARENT)
+  let pen = CreatePen(PS_SOLID, 3, RGB(0, 120, 215))
+  let brush = GetStockObject(NULL_BRUSH)
+  let oldPen = SelectObject(hdc, pen)
+  let oldBrush = SelectObject(hdc, brush)
+
+  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+
+  discard SelectObject(hdc, oldPen)
+  discard SelectObject(hdc, oldBrush)
+  discard DeleteObject(pen)
+  discard ReleaseDC(appState.hwnd, hdc)
+
 proc refreshDragPreview() =
   let preview = selectionPreviewRect()
   let previous = appState.lastDragPreview
@@ -252,6 +273,7 @@ proc refreshDragPreview() =
 
   if preview.isSome and (previous.isNone or not rectEquals(previous.get(), preview.get())):
     invalidatePreviewRect(preview)
+    drawPreviewOverlay(preview.get())
 
 proc clearDragSelection(invalidate: bool = true) =
   let lastPreview = appState.lastDragPreview
@@ -960,8 +982,9 @@ proc drawSelectionPreview(hdc: HDC) =
     return
 
   let rect = preview.get()
-  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
-  let brush = CreateHatchBrush(HS_DIAGCROSS, RGB(0, 120, 215))
+  discard SetBkMode(hdc, TRANSPARENT)
+  let pen = CreatePen(PS_SOLID, 3, RGB(0, 120, 215))
+  let brush = GetStockObject(NULL_BRUSH)
   let oldPen = SelectObject(hdc, pen)
   let oldBrush = SelectObject(hdc, brush)
 
@@ -970,7 +993,6 @@ proc drawSelectionPreview(hdc: HDC) =
   discard SelectObject(hdc, oldPen)
   discard SelectObject(hdc, oldBrush)
   discard DeleteObject(pen)
-  discard DeleteObject(brush)
 
 proc paintStatus(hwnd: HWND) =
   var ps: PAINTSTRUCT
