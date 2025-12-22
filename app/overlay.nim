@@ -120,8 +120,8 @@ type
     dragStart: POINT
     dragCurrent: POINT
     mouseCropEnabled: bool
-    dragThumbnailSuppressed: bool
     lastDragBlockReason: string
+    lastDragPreview: Option[RECT]
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -216,39 +216,67 @@ proc dragSelectionAllowed(reason: var string): bool =
   reason = "ok"
   true
 
-proc setDragThumbnailSuppression(active: bool) =
-  if active:
-    if appState.dragThumbnailSuppressed:
-      return
-    appState.dragThumbnailSuppressed = true
-    if not appState.thumbnailSuppressed:
-      appState.thumbnailSuppressed = true
-      updateThumbnailProperties()
+proc clearDragPreview() =
+  if appState.lastDragPreview.isNone:
     return
 
-  if not appState.dragThumbnailSuppressed:
+  let hdc = GetWindowDC(appState.hwnd)
+  if hdc != 0:
+    let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+    let oldPen = SelectObject(hdc, pen)
+    let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
+    let oldRop = SetROP2(hdc, R2_NOTXORPEN)
+    let rect = appState.lastDragPreview.get()
+    discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+    discard SetROP2(hdc, oldRop)
+    discard SelectObject(hdc, oldPen)
+    discard SelectObject(hdc, oldBrush)
+    discard DeleteObject(pen)
+    discard ReleaseDC(appState.hwnd, hdc)
+
+  appState.lastDragPreview = none(RECT)
+
+proc drawDragPreview(rect: RECT) =
+  let hdc = GetWindowDC(appState.hwnd)
+  if hdc == 0:
     return
 
-  appState.dragThumbnailSuppressed = false
-  let target = appState.targetHwnd
-  let shouldRemainSuppressed =
-    target != 0 and (IsIconic(target) != 0 or IsWindowVisible(target) == 0)
-  if appState.thumbnailSuppressed and not shouldRemainSuppressed:
-    appState.thumbnailSuppressed = false
-    updateThumbnailProperties()
+  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
+  let oldPen = SelectObject(hdc, pen)
+  let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
+  let oldRop = SetROP2(hdc, R2_NOTXORPEN)
+
+  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
+
+  discard SetROP2(hdc, oldRop)
+  discard SelectObject(hdc, oldPen)
+  discard SelectObject(hdc, oldBrush)
+  discard DeleteObject(pen)
+  discard ReleaseDC(appState.hwnd, hdc)
+
+proc refreshDragPreview() =
+  let preview = selectionPreviewRect()
+  if preview.isNone:
+    clearDragPreview()
+    return
+
+  if appState.lastDragPreview.isSome:
+    drawDragPreview(appState.lastDragPreview.get())
+
+  drawDragPreview(preview.get())
+  appState.lastDragPreview = some(preview.get())
 
 proc clearDragSelection(invalidate: bool = true) =
   appState.dragSelecting = false
   appState.dragStart = POINT()
   appState.dragCurrent = POINT()
-  setDragThumbnailSuppression(false)
+  clearDragPreview()
   updateStatusText()
   if invalidate and appState.hwnd != 0:
     discard InvalidateRect(appState.hwnd, nil, FALSE)
 
 proc cancelDragSelection() =
   if not appState.dragSelecting:
-    setDragThumbnailSuppression(false)
     return
   if GetCapture() == appState.hwnd:
     discard ReleaseCapture()
@@ -275,9 +303,8 @@ proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
   appState.dragCurrent = start
   appState.lastDragBlockReason = ""
   updateStatusText()
-  setDragThumbnailSuppression(true)
   discard SetCapture(hwnd)
-  discard InvalidateRect(hwnd, nil, FALSE)
+  refreshDragPreview()
   logEvent(
     "mouse_crop",
     [
@@ -295,14 +322,13 @@ proc updateDragSelection(lParam: LPARAM): bool =
 
   let bounds = selectionBounds()
   if bounds.isNone:
-    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"cancelled"), ("reason", %*"no_bounds")])
-    cancelDragSelection()
+    logEvent("mouse_crop", [("action", %*"update"), ("result", %*"blocked"), ("reason", %*"no_bounds")])
     return true
 
   let nextPoint = clampPointToRect(toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam))), bounds.get())
   if nextPoint.x != appState.dragCurrent.x or nextPoint.y != appState.dragCurrent.y:
     appState.dragCurrent = nextPoint
-    discard InvalidateRect(appState.hwnd, nil, FALSE)
+    refreshDragPreview()
   true
 
 proc finalizeDragSelection(): bool =
@@ -777,7 +803,6 @@ proc showDebugInfo() =
       "Drag Start: " & $appState.dragStart.x & "," & $appState.dragStart.y &
       " Current: " & $appState.dragCurrent.x & "," & $appState.dragCurrent.y
     )
-  lines.add("Thumbnail Suppressed (drag): " & boolLabel(appState.dragThumbnailSuppressed))
 
   discard MessageBoxW(
     appState.hwnd,
@@ -1434,9 +1459,6 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     if int32(wParam) == VK_ESCAPE:
       cancelDragSelection()
       return 0
-  of WM_CAPTURECHANGED, WM_CANCELMODE:
-    cancelDragSelection()
-    return 0
   of WM_DESTROY:
     stopValidationTimer()
     unregisterThumbnail()
