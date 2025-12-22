@@ -502,7 +502,7 @@ proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
     return
 
   if not shouldIncludeWindow(stored, opts):
-    if not shouldIncludeWindow(stored, opts, false):
+    if not shouldIncludeWindow(stored, opts, nil, false):
       return
 
   let identity = collectWindowIdentity(stored)

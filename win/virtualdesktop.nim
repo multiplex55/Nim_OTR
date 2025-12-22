@@ -32,4 +32,4 @@ type
 
 proc CreateVirtualDesktopManager*(manager: ptr ptr IVirtualDesktopManager): HRESULT =
   CoCreateInstance(CLSID_VirtualDesktopManager, cast[LPUNKNOWN](nil), CLSCTX_ALL,
-      IID_IVirtualDesktopManager, cast[ptr pointer](manager))
+      IID_IVirtualDesktopManager, cast[ptr LPVOID](manager))

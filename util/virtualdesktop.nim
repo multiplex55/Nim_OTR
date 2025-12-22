@@ -1,5 +1,6 @@
 import std/options
 import winim/lean
+import winim/com
 import ../win/virtualdesktop
 
 type
@@ -37,7 +38,7 @@ proc windowDesktopId*(manager: ptr VirtualDesktopManager; hwnd: HWND): Option[GU
 
   var desktopId: GUID
   if SUCCEEDED(manager[].raw.lpVtbl.GetWindowDesktopId(manager[].raw, hwnd, addr desktopId)):
-    some(desktopId)
+    return some(desktopId)
 
 proc isOnCurrentDesktop*(manager: ptr VirtualDesktopManager; hwnd: HWND): Option[bool] =
   if manager == nil or not manager[].valid:
@@ -46,7 +47,7 @@ proc isOnCurrentDesktop*(manager: ptr VirtualDesktopManager; hwnd: HWND): Option
   var onCurrent: WINBOOL
   if SUCCEEDED(manager[].raw.lpVtbl.IsWindowOnCurrentVirtualDesktop(manager[].raw, hwnd,
       addr onCurrent)):
-    some(onCurrent != 0)
+    return some(onCurrent != 0)
 
 proc formatDesktopId*(desktopId: GUID): string =
   $desktopId
