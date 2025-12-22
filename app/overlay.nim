@@ -121,6 +121,8 @@ type
     mouseCropEnabled: bool
     lastDragBlockReason: string
     lastDragPreview: Option[RECT]
+    draggingWindow: bool
+    dragWindowOffset: POINT
     baseStyle: DWORD
     baseExStyle: DWORD
 
@@ -379,6 +381,54 @@ proc finalizeDragSelection(): bool =
     ]
   )
   discard InvalidateRect(appState.hwnd, nil, FALSE)
+  true
+
+proc beginWindowDrag(hwnd: HWND; lParam: LPARAM): bool =
+  if appState.mouseCropEnabled or shiftHeld():
+    return false
+
+  var windowRect: RECT
+  if GetWindowRect(hwnd, addr windowRect) == 0:
+    return false
+
+  var cursor = toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam)))
+  discard ClientToScreen(hwnd, addr cursor)
+
+  appState.draggingWindow = true
+  appState.dragWindowOffset = toPoint(cursor.x - windowRect.left, cursor.y - windowRect.top)
+  discard SetCapture(hwnd)
+  true
+
+proc updateWindowDrag(): bool =
+  if not appState.draggingWindow:
+    return false
+
+  var cursor: POINT
+  if GetCursorPos(addr cursor) == 0:
+    return true
+
+  let nextLeft = cursor.x - appState.dragWindowOffset.x
+  let nextTop = cursor.y - appState.dragWindowOffset.y
+
+  discard SetWindowPos(
+    appState.hwnd,
+    0,
+    nextLeft,
+    nextTop,
+    0,
+    0,
+    SWP_NOSIZE or SWP_NOZORDER or SWP_NOACTIVATE
+  )
+  true
+
+proc endWindowDrag(): bool =
+  if not appState.draggingWindow:
+    return false
+
+  appState.draggingWindow = false
+  appState.dragWindowOffset = POINT()
+  if GetCapture() == appState.hwnd:
+    discard ReleaseCapture()
   true
 
 proc saveCropToConfig(rect: RECT; active: bool) =
@@ -1494,6 +1544,8 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_MOUSEMOVE:
     if updateDragSelection(lParam):
       return 0
+    if updateWindowDrag():
+      return 0
   of WM_NCHITTEST:
     let hit = DefWindowProcW(hwnd, msg, wParam, lParam)
     if appState.clickThroughEnabled and not appState.mouseCropEnabled and not appState.dragSelecting and not shiftHeld() and hit == HTCLIENT:
@@ -1504,9 +1556,13 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
       return 0
     if shiftHeld() and not appState.mouseCropEnabled:
       restoreAndFocusTarget()
+    elif not appState.mouseCropEnabled and beginWindowDrag(hwnd, lParam):
+      return 0
     return DefWindowProcW(hwnd, msg, wParam, lParam)
   of WM_LBUTTONUP:
     if finalizeDragSelection():
+      return 0
+    if endWindowDrag():
       return 0
   of WM_TIMER:
     if wParam == validationTimerId:
