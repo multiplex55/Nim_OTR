@@ -120,6 +120,8 @@ type
     dragStart: POINT
     dragCurrent: POINT
     mouseCropEnabled: bool
+    dragThumbnailSuppressed: bool
+    lastDragBlockReason: string
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
@@ -206,25 +208,47 @@ proc dragSelectionAllowed(reason: var string): bool =
     reason = "no_target"
     return false
 
-  ## Allow dragging whenever mouse crop is armed, or the crop dialog is up,
-  ## so foreground timing cannot block a drag start.
-  if not appState.mouseCropEnabled and not cropDialogVisible():
+  if not appState.mouseCropEnabled:
     reason = "mouse_crop_disabled"
     return false
 
+  appState.lastDragBlockReason = ""
   reason = "ok"
   true
+
+proc setDragThumbnailSuppression(active: bool) =
+  if active:
+    if appState.dragThumbnailSuppressed:
+      return
+    appState.dragThumbnailSuppressed = true
+    if not appState.thumbnailSuppressed:
+      appState.thumbnailSuppressed = true
+      updateThumbnailProperties()
+    return
+
+  if not appState.dragThumbnailSuppressed:
+    return
+
+  appState.dragThumbnailSuppressed = false
+  let target = appState.targetHwnd
+  let shouldRemainSuppressed =
+    target != 0 and (IsIconic(target) != 0 or IsWindowVisible(target) == 0)
+  if appState.thumbnailSuppressed and not shouldRemainSuppressed:
+    appState.thumbnailSuppressed = false
+    updateThumbnailProperties()
 
 proc clearDragSelection(invalidate: bool = true) =
   appState.dragSelecting = false
   appState.dragStart = POINT()
   appState.dragCurrent = POINT()
+  setDragThumbnailSuppression(false)
   updateStatusText()
   if invalidate and appState.hwnd != 0:
     discard InvalidateRect(appState.hwnd, nil, FALSE)
 
 proc cancelDragSelection() =
   if not appState.dragSelecting:
+    setDragThumbnailSuppression(false)
     return
   if GetCapture() == appState.hwnd:
     discard ReleaseCapture()
@@ -233,11 +257,13 @@ proc cancelDragSelection() =
 proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
   var reason = ""
   if not dragSelectionAllowed(reason):
+    appState.lastDragBlockReason = reason
     logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*reason)])
     return false
 
   let bounds = selectionBounds()
   if bounds.isNone:
+    appState.lastDragBlockReason = "no_bounds"
     logEvent("mouse_crop", [("action", %*"begin"), ("result", %*"blocked"), ("reason", %*"no_bounds")])
     return false
 
@@ -247,7 +273,9 @@ proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
   appState.dragSelecting = true
   appState.dragStart = start
   appState.dragCurrent = start
+  appState.lastDragBlockReason = ""
   updateStatusText()
+  setDragThumbnailSuppression(true)
   discard SetCapture(hwnd)
   discard InvalidateRect(hwnd, nil, FALSE)
   logEvent(
@@ -288,12 +316,14 @@ proc finalizeDragSelection(): bool =
   clearDragSelection(false)
 
   if preview.isNone:
+    appState.lastDragBlockReason = "no_preview"
     logEvent("mouse_crop", [("action", %*"finalize"), ("result", %*"no_preview")])
     discard InvalidateRect(appState.hwnd, nil, FALSE)
     return true
 
   let rect = preview.get()
   if rectWidth(rect) < minSelectionSize or rectHeight(rect) < minSelectionSize:
+    appState.lastDragBlockReason = "too_small"
     logEvent(
       "mouse_crop",
       [
@@ -731,6 +761,7 @@ proc showDebugInfo() =
   lines.add("Mouse Crop Enabled: " & boolLabel(appState.mouseCropEnabled))
   lines.add("Drag Selecting: " & boolLabel(appState.dragSelecting))
   lines.add("Click-through Enabled: " & boolLabel(appState.clickThroughEnabled))
+  lines.add("Drag Block Reason: " & (if appState.lastDragBlockReason.len > 0: appState.lastDragBlockReason else: "None"))
   lines.add("Crop Dialog Visible: " & boolLabel(cropDialogVisible()))
   let captureOwner = GetCapture()
   lines.add("Has Capture: " & boolLabel(captureOwner == appState.hwnd) &
@@ -746,6 +777,7 @@ proc showDebugInfo() =
       "Drag Start: " & $appState.dragStart.x & "," & $appState.dragStart.y &
       " Current: " & $appState.dragCurrent.x & "," & $appState.dragCurrent.y
     )
+  lines.add("Thumbnail Suppressed (drag): " & boolLabel(appState.dragThumbnailSuppressed))
 
   discard MessageBoxW(
     appState.hwnd,
