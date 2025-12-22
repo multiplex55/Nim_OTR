@@ -47,7 +47,6 @@ const
   menuByCommand = MF_BYCOMMAND
 
   styleStandard = WS_OVERLAPPEDWINDOW
-  styleBorderless = WS_POPUP or WS_THICKFRAME or WS_MINIMIZEBOX or WS_MAXIMIZEBOX
   exStyleLayered = WS_EX_LAYERED
   minSelectionSize = 8
   VK_SHIFT = 0x10
@@ -122,11 +121,14 @@ type
     mouseCropEnabled: bool
     lastDragBlockReason: string
     lastDragPreview: Option[RECT]
+    baseStyle: DWORD
+    baseExStyle: DWORD
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
-  clickThroughEnabled: false
+  clickThroughEnabled: false,
+  baseStyle: DWORD(styleStandard)
 )
 
 proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
@@ -591,14 +593,34 @@ proc destroyContextMenu() =
   discard DestroyMenu(appState.contextMenu)
   appState.contextMenu = 0
 
-proc currentStyle(): DWORD =
-  if appState.cfg.borderless: styleBorderless else: styleStandard
+proc rememberRestorableStyle(hwnd: HWND) =
+  let current = DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE))
+  if current != 0:
+    appState.baseStyle = current
+
+proc captureBaseStyles(hwnd: HWND) =
+  if appState.baseExStyle == 0:
+    appState.baseExStyle = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
+
+proc currentStyle(hwnd: HWND): DWORD =
+  let visibleFlags = if hwnd != 0: DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE)) and WS_VISIBLE else: DWORD(0)
+  let baseStyle = (if appState.baseStyle != 0: appState.baseStyle else: styleStandard) or visibleFlags
+  if appState.cfg.borderless:
+    baseStyle and not WS_CAPTION and not WS_SYSMENU
+  else:
+    baseStyle
 
 proc applyWindowStyles(hwnd: HWND) =
-  let style = currentStyle()
-  discard SetWindowLongPtrW(hwnd, GWL_STYLE, style)
+  captureBaseStyles(hwnd)
+
+  let style = currentStyle(hwnd)
+  discard SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR(style))
+
   let currentEx = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
-  discard SetWindowLongPtrW(hwnd, GWL_EXSTYLE, LONG_PTR(currentEx or exStyleLayered))
+  if appState.baseExStyle == 0:
+    appState.baseExStyle = currentEx
+  let desiredEx = appState.baseExStyle or (currentEx and WS_EX_TRANSPARENT) or exStyleLayered
+  discard SetWindowLongPtrW(hwnd, GWL_EXSTYLE, LONG_PTR(desiredEx))
 
   let insertAfter = if appState.cfg.topMost: HWND_TOPMOST else: HWND_NOTOPMOST
   discard SetWindowPos(
@@ -1366,6 +1388,8 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     appState.cfg.topMost = not appState.cfg.topMost
     applyWindowStyles(hwnd)
   of idToggleBorderless:
+    if not appState.cfg.borderless:
+      rememberRestorableStyle(hwnd)
     appState.cfg.borderless = not appState.cfg.borderless
     applyWindowStyles(hwnd)
   of idEditCrop:
@@ -1514,7 +1538,7 @@ proc createWindow(hInstance: HINSTANCE): HWND =
     exStyleLayered,
     className,
     overlayTitle,
-    currentStyle(),
+    currentStyle(0),
     xpos,
     ypos,
     int32(appState.cfg.width),
