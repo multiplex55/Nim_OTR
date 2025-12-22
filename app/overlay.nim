@@ -227,63 +227,33 @@ proc dragSelectionAllowed(reason: var string): bool =
   reason = "ok"
   true
 
-proc clearDragPreview() =
-  if appState.lastDragPreview.isNone:
+proc invalidatePreviewRect(rect: Option[RECT]) =
+  if appState.hwnd == 0 or rect.isNone:
     return
 
-  let hdc = GetWindowDC(appState.hwnd)
-  if hdc != 0:
-    let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
-    let oldPen = SelectObject(hdc, pen)
-    let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
-    let oldRop = SetROP2(hdc, R2_NOTXORPEN)
-    let rect = appState.lastDragPreview.get()
-    discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
-    discard SetROP2(hdc, oldRop)
-    discard SelectObject(hdc, oldPen)
-    discard SelectObject(hdc, oldBrush)
-    discard DeleteObject(pen)
-    discard ReleaseDC(appState.hwnd, hdc)
-
-  appState.lastDragPreview = none(RECT)
-
-proc drawDragPreview(rect: RECT) =
-  let hdc = GetWindowDC(appState.hwnd)
-  if hdc == 0:
-    return
-
-  let pen = CreatePen(PS_SOLID, 2, RGB(0, 120, 215))
-  let oldPen = SelectObject(hdc, pen)
-  let oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH))
-  let oldRop = SetROP2(hdc, R2_NOTXORPEN)
-
-  discard Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom)
-
-  discard SetROP2(hdc, oldRop)
-  discard SelectObject(hdc, oldPen)
-  discard SelectObject(hdc, oldBrush)
-  discard DeleteObject(pen)
-  discard ReleaseDC(appState.hwnd, hdc)
+  var bounds = rect.get()
+  discard InvalidateRect(appState.hwnd, addr bounds, FALSE)
 
 proc refreshDragPreview() =
   let preview = selectionPreviewRect()
-  if preview.isNone:
-    clearDragPreview()
-    return
+  let previous = appState.lastDragPreview
+  appState.lastDragPreview = preview
 
-  if appState.lastDragPreview.isSome:
-    drawDragPreview(appState.lastDragPreview.get())
+  if previous.isSome:
+    invalidatePreviewRect(previous)
 
-  drawDragPreview(preview.get())
-  appState.lastDragPreview = some(preview.get())
+  if preview.isSome and (previous.isNone or not rectEquals(previous.get(), preview.get())):
+    invalidatePreviewRect(preview)
 
 proc clearDragSelection(invalidate: bool = true) =
+  let lastPreview = appState.lastDragPreview
   appState.dragSelecting = false
   appState.dragStart = POINT()
   appState.dragCurrent = POINT()
-  clearDragPreview()
+  appState.lastDragPreview = none(RECT)
   updateStatusText()
   if invalidate and appState.hwnd != 0:
+    invalidatePreviewRect(lastPreview)
     discard InvalidateRect(appState.hwnd, nil, FALSE)
 
 proc cancelDragSelection() =
