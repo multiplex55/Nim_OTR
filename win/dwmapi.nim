@@ -13,7 +13,8 @@ when not declared(DWM_THUMBNAIL_PROPERTIES):
       fSourceClientAreaOnly*: WINBOOL
 
 when not declared(DwmRegisterThumbnail):
-  proc DwmRegisterThumbnail*(hwndDestination: HWND; hwndSource: HWND; phThumbnailId: ptr HANDLE): HRESULT
+  proc DwmRegisterThumbnail*(hwndDestination: HWND; hwndSource: HWND;
+      phThumbnailId: ptr HANDLE): HRESULT
       {.stdcall, dynlib: "dwmapi", importc.}
 
 when not declared(DwmUnregisterThumbnail):
@@ -21,15 +22,17 @@ when not declared(DwmUnregisterThumbnail):
       dynlib: "dwmapi", importc.}
 
 when not declared(DwmUpdateThumbnailProperties):
-  proc DwmUpdateThumbnailProperties*(hThumbnailId: HANDLE; ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT
+  proc DwmUpdateThumbnailProperties*(hThumbnailId: HANDLE;
+      ptnProperties: ptr DWM_THUMBNAIL_PROPERTIES): HRESULT
       {.stdcall, dynlib: "dwmapi", importc.}
 
 when not declared(DwmQueryThumbnailSourceSize):
-  proc DwmQueryThumbnailSourceSize*(hThumbnail: HANDLE; pSize: ptr SIZE): HRESULT {.stdcall,
-      dynlib: "dwmapi", importc.}
+  proc DwmQueryThumbnailSourceSize*(hThumbnail: HANDLE;
+      pSize: ptr SIZE): HRESULT {.stdcall, dynlib: "dwmapi", importc.}
 
 when not declared(DwmGetWindowAttribute):
-  proc DwmGetWindowAttribute*(hwnd: HWND; dwAttribute: DWORD; pvAttribute: pointer; cbAttribute: DWORD): HRESULT
+  proc DwmGetWindowAttribute*(hwnd: HWND; dwAttribute: DWORD;
+      pvAttribute: pointer; cbAttribute: DWORD): HRESULT
       {.stdcall, dynlib: "dwmapi", importc.}
 
 const

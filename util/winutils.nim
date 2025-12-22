@@ -12,7 +12,8 @@ proc windowTitle*(hwnd: HWND): string =
   discard GetWindowTextW(hwnd, buf, length + 1)
   $buf
 
-proc processIdentity*(hwnd: HWND; unknownName: string = "<unknown>"): tuple[name: string, path: string] =
+proc processIdentity*(hwnd: HWND; unknownName: string = "<unknown>"): tuple[
+    name: string; path: string] =
   var pid: DWORD
   discard GetWindowThreadProcessId(hwnd, addr pid)
   if pid == 0:
@@ -39,7 +40,8 @@ proc processPath*(hwnd: HWND): string =
 
 proc isCloaked*(hwnd: HWND): bool =
   var cloaked: DWORD
-  if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, addr cloaked, DWORD(sizeof(cloaked))) != 0:
+  if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, addr cloaked, DWORD(sizeof(
+      cloaked))) != 0:
     return false
   cloaked != 0
 

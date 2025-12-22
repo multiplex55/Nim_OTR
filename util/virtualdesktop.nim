@@ -37,16 +37,18 @@ proc windowDesktopId*(manager: ptr VirtualDesktopManager; hwnd: HWND): Option[GU
     return
 
   var desktopId: GUID
-  if SUCCEEDED(manager[].raw.lpVtbl.GetWindowDesktopId(manager[].raw, hwnd, addr desktopId)):
+  if SUCCEEDED(manager[].raw.lpVtbl.GetWindowDesktopId(manager[].raw, hwnd,
+      addr desktopId)):
     return some(desktopId)
 
-proc isOnCurrentDesktop*(manager: ptr VirtualDesktopManager; hwnd: HWND): Option[bool] =
+proc isOnCurrentDesktop*(manager: ptr VirtualDesktopManager;
+    hwnd: HWND): Option[bool] =
   if manager == nil or not manager[].valid:
     return
 
   var onCurrent: WINBOOL
-  if SUCCEEDED(manager[].raw.lpVtbl.IsWindowOnCurrentVirtualDesktop(manager[].raw, hwnd,
-      addr onCurrent)):
+  if SUCCEEDED(manager[].raw.lpVtbl.IsWindowOnCurrentVirtualDesktop(manager[
+      ].raw, hwnd, addr onCurrent)):
     return some(onCurrent != 0)
 
 proc formatDesktopId*(desktopId: GUID): string =

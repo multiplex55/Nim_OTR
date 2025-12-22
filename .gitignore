@@ -2,3 +2,4 @@ nimcache/
 nimblecache/
 htmldocs/
 clean_branches.bat
+/app/bin

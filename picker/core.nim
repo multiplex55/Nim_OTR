@@ -40,7 +40,8 @@ proc rootWindow(hwnd: HWND): HWND =
 proc rootOwnerWindow(hwnd: HWND): HWND =
   GetAncestor(hwnd, GA_ROOTOWNER)
 
-proc processIdentity*(hwnd: HWND): tuple[name: string, path: string] {.inline.} =
+proc processIdentity*(hwnd: HWND): tuple[name: string;
+    path: string] {.inline.} =
   winutils.processIdentity(hwnd)
 
 proc collectWindowInfo(hwnd: HWND; desktopManager: ptr VirtualDesktopManager = nil): WindowInfo =
@@ -87,7 +88,8 @@ proc hasTitle(hwnd: HWND): bool =
   title.strip.len > 0
 
 proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
-    desktopManager: ptr VirtualDesktopManager = nil; strict: bool = true): bool =
+    desktopManager: ptr VirtualDesktopManager = nil;
+        strict: bool = true): bool =
   if hwnd == 0:
     return false
   if isToolWindow(hwnd):
@@ -131,8 +133,8 @@ proc shouldIncludeWindow*(hwnd: HWND; opts: WindowEligibilityOptions;
 proc collectEligibleWindows(opts: WindowEligibilityOptions; strict: bool;
     desktopManager: ptr VirtualDesktopManager): seq[WindowInfo] =
   var resultList: seq[WindowInfo] = @[]
-  var context = EnumWindowsContext(opts: addr opts, strict: strict, listPtr: addr resultList,
-      desktopManager: desktopManager)
+  var context = EnumWindowsContext(opts: addr opts, strict: strict,
+      listPtr: addr resultList, desktopManager: desktopManager)
 
   proc callback(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.} =
     let ctx = cast[ptr EnumWindowsContext](lParam)

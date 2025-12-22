@@ -7,8 +7,8 @@ when not declared(EnumWindowsProc):
     EnumWindowsProc* = proc(hwnd: HWND; lParam: LPARAM): WINBOOL {.stdcall.}
 
 when not declared(EnumWindows):
-  proc EnumWindows*(lpEnumFunc: EnumWindowsProc; lParam: LPARAM): WINBOOL {.stdcall,
-      dynlib: "user32", importc.}
+  proc EnumWindows*(lpEnumFunc: EnumWindowsProc;
+      lParam: LPARAM): WINBOOL {.stdcall, dynlib: "user32", importc.}
 
 when not declared(CreatePopupMenu):
   proc CreatePopupMenu*(): HMENU {.stdcall, dynlib: "user32", importc.}
@@ -30,7 +30,8 @@ when not declared(CheckMenuItem):
       stdcall, dynlib: "user32", importc.}
 
 when not declared(RegisterHotKey):
-  proc RegisterHotKey*(hWnd: HWND; id: int32; fsModifiers: UINT; vk: UINT): WINBOOL
+  proc RegisterHotKey*(hWnd: HWND; id: int32; fsModifiers: UINT;
+      vk: UINT): WINBOOL
       {.stdcall, dynlib: "user32", importc.}
 
 when not declared(UnregisterHotKey):
@@ -38,7 +39,8 @@ when not declared(UnregisterHotKey):
       dynlib: "user32", importc.}
 
 when not declared(SetWindowLongPtrW):
-  proc SetWindowLongPtrW*(hWnd: HWND; nIndex: int32; dwNewLong: LONG_PTR): LONG_PTR
+  proc SetWindowLongPtrW*(hWnd: HWND; nIndex: int32;
+      dwNewLong: LONG_PTR): LONG_PTR
       {.stdcall, dynlib: "user32", importc.}
 
 when not declared(GetWindowLongPtrW):
@@ -60,7 +62,8 @@ when not declared(SetForegroundWindow):
       importc.}
 
 when not declared(SetTimer):
-  proc SetTimer*(hwnd: HWND; nIDEvent: UINT_PTR; uElapse: UINT; lpTimerFunc: pointer): UINT_PTR
+  proc SetTimer*(hwnd: HWND; nIDEvent: UINT_PTR; uElapse: UINT;
+      lpTimerFunc: pointer): UINT_PTR
       {.stdcall, dynlib: "user32", importc.}
 
 when not declared(KillTimer):
@@ -75,7 +78,8 @@ when not declared(IsWindowVisible):
       importc.}
 
 when not declared(MessageBoxW):
-  proc MessageBoxW*(hWnd: HWND; lpText: LPCWSTR; lpCaption: LPCWSTR; uType: UINT): int32
+  proc MessageBoxW*(hWnd: HWND; lpText: LPCWSTR; lpCaption: LPCWSTR;
+      uType: UINT): int32
       {.stdcall, dynlib: "user32", importc.}
 
 when not declared(GetWindowTextLengthW):
@@ -105,7 +109,8 @@ when not declared(GetLastActivePopup):
       importc.}
 
 when not declared(GetAncestor):
-  proc GetAncestor*(hwnd: HWND; gaFlags: UINT): HWND {.stdcall, dynlib: "user32",
+  proc GetAncestor*(hwnd: HWND; gaFlags: UINT): HWND {.stdcall,
+      dynlib: "user32",
       importc.}
 
 when not declared(GetCursorPos):

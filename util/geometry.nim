@@ -18,13 +18,16 @@ proc height*(rect: IntRect): int =
 ## Calculates an aspect-correct rectangle that fits inside `bounds` while preserving the
 ## original `contentSize` aspect ratio. The result is centered within `bounds` and may
 ## introduce letterboxing/pillarboxing when necessary.
-proc aspectFitRect*(bounds: IntRect; contentSize: tuple[width, height: int]): IntRect =
+proc aspectFitRect*(bounds: IntRect; contentSize: tuple[width,
+    height: int]): IntRect =
   let boundsWidth = bounds.width
   let boundsHeight = bounds.height
-  if boundsWidth <= 0 or boundsHeight <= 0 or contentSize.width <= 0 or contentSize.height <= 0:
+  if boundsWidth <= 0 or boundsHeight <= 0 or contentSize.width <= 0 or
+      contentSize.height <= 0:
     return bounds
 
-  let scale = min(boundsWidth.float / contentSize.width.float, boundsHeight.float / contentSize.height.float)
+  let scale = min(boundsWidth.float / contentSize.width.float,
+      boundsHeight.float / contentSize.height.float)
   let scaledWidth = int(round(contentSize.width.float * scale))
   let scaledHeight = int(round(contentSize.height.float * scale))
   let offsetX = (boundsWidth - scaledWidth) div 2
@@ -62,7 +65,9 @@ proc mapRectToSource*(overlayRect, destRect, sourceRect: IntRect): IntRect =
   var mapped: IntRect
   mapped.left = sourceRect.left + int((overlayRect.left - destRect.left).float * scaleX)
   mapped.top = sourceRect.top + int((overlayRect.top - destRect.top).float * scaleY)
-  mapped.right = sourceRect.left + int((overlayRect.right - destRect.left).float * scaleX)
-  mapped.bottom = sourceRect.top + int((overlayRect.bottom - destRect.top).float * scaleY)
+  mapped.right = sourceRect.left + int((overlayRect.right -
+      destRect.left).float * scaleX)
+  mapped.bottom = sourceRect.top + int((overlayRect.bottom -
+      destRect.top).float * scaleY)
 
   clampRect(mapped, sourceRect)
