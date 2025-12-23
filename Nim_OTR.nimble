@@ -1,5 +1,4 @@
 # Package
-name            = "nim_otr"
 description     = "Overlay telemetry recorder for Windows with picker and UI helpers"
 version         = "0.1.0"
 author          = "multiplex55"
