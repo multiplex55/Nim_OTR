@@ -10,6 +10,7 @@ import ../picker/core
 ## Forward declarations for routines used before their definitions.
 proc clientRect(hwnd: HWND): RECT
 proc updateThumbnailProperties()
+proc applyAspectLock()
 proc overlayDestinationRect(): IntRect
 proc updateStatusText()
 proc boolLabel(flag: bool): string
@@ -32,11 +33,12 @@ const
   idSelectWindow = 1000
   idToggleTopMost = 1001
   idToggleBorderless = 1002
-  idEditCrop = 1003
-  idResetCrop = 1004
-  idShowDebugInfo = 1005
-  idMouseCrop = 1006
-  idExit = 1007
+  idToggleAspectLock = 1003
+  idEditCrop = 1004
+  idResetCrop = 1005
+  idShowDebugInfo = 1006
+  idMouseCrop = 1007
+  idExit = 1008
   idWindowMenuNone = 1100
   idWindowMenuStart = 1101
 
@@ -79,6 +81,7 @@ let
   menuLabelWindowNone = L"None"
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
+  menuLabelAspectLock = L"Lock Aspect to Source"
   menuLabelCrop = L"Crop…"
   menuLabelMouseCrop = L"Mouse Crop"
   menuLabelResetCrop = L"Reset Crop"
@@ -665,6 +668,7 @@ proc createContextMenu() =
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
   discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
+  discard AppendMenuW(menu, menuTopFlags, idToggleAspectLock, menuLabelAspectLock)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
@@ -685,6 +689,9 @@ proc updateContextMenuChecks() =
 
   let borderFlags: UINT = UINT(if appState.cfg.borderless: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleBorderless, borderFlags)
+
+  let aspectFlags: UINT = UINT(if appState.cfg.lockAspect: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
+  discard CheckMenuItem(appState.contextMenu, idToggleAspectLock, aspectFlags)
 
   let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
@@ -881,6 +888,102 @@ proc updateThumbnailProperties() =
   props.fVisible = (if appState.thumbnailVisible and not appState.thumbnailSuppressed: 1 else: 0)
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
+
+proc currentTargetAspect(): Option[float] =
+  let sourceRect = currentCropRect()
+  let sourceWidth = rectWidth(sourceRect)
+  let sourceHeight = rectHeight(sourceRect)
+  if sourceWidth <= 0 or sourceHeight <= 0:
+    return
+  some(sourceWidth.float / sourceHeight.float)
+
+proc applyAspectLock() =
+  if not appState.cfg.lockAspect or appState.hwnd == 0:
+    return
+
+  let targetAspectOpt = currentTargetAspect()
+  if targetAspectOpt.isNone:
+    return
+
+  let targetAspect = targetAspectOpt.get()
+  let client = clientRect(appState.hwnd)
+  let clientWidth = rectWidth(client)
+  let clientHeight = rectHeight(client)
+  if clientWidth <= 0 or clientHeight <= 0:
+    return
+
+  let widthFromHeight = int(round(clientHeight.float * targetAspect))
+  let heightFromWidth = int(round(clientWidth.float / targetAspect))
+  var newWidth = clientWidth
+  var newHeight = clientHeight
+
+  let widthDelta = abs(widthFromHeight - clientWidth)
+  let heightDelta = abs(heightFromWidth - clientHeight)
+  if widthDelta <= heightDelta:
+    newWidth = widthFromHeight
+  else:
+    newHeight = heightFromWidth
+
+  if newWidth <= 0 or newHeight <= 0:
+    return
+
+  if newWidth == clientWidth and newHeight == clientHeight:
+    return
+
+  setClientSize(appState.hwnd, newWidth, newHeight)
+  updateThumbnailProperties()
+
+proc adjustSizingRectForAspect(rect: var RECT; edge: UINT) =
+  let targetAspectOpt = currentTargetAspect()
+  if targetAspectOpt.isNone:
+    return
+
+  let targetAspect = targetAspectOpt.get()
+  let width = rectWidth(rect)
+  let height = rectHeight(rect)
+  if width <= 0 or height <= 0:
+    return
+
+  let widthFromHeight = int(round(height.float * targetAspect))
+  let heightFromWidth = int(round(width.float / targetAspect))
+
+  var newWidth = width
+  var newHeight = height
+  let widthDelta = abs(widthFromHeight - width)
+  let heightDelta = abs(heightFromWidth - height)
+
+  if widthDelta <= heightDelta:
+    newWidth = widthFromHeight
+  else:
+    newHeight = heightFromWidth
+
+  case edge
+  of WMSZ_LEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_RIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_TOP:
+    rect.top = rect.bottom - LONG(newHeight)
+    rect.right = rect.left + LONG(newWidth)
+  of WMSZ_BOTTOM:
+    rect.bottom = rect.top + LONG(newHeight)
+    rect.right = rect.left + LONG(newWidth)
+  of WMSZ_TOPLEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.top = rect.bottom - LONG(newHeight)
+  of WMSZ_TOPRIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.top = rect.bottom - LONG(newHeight)
+  of WMSZ_BOTTOMLEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_BOTTOMRIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  else:
+    discard
 
 proc mouseOverOverlay(lParam: LPARAM): bool =
   ## WM_MOUSEWHEEL provides screen coordinates in lParam; ensure the topmost
@@ -1230,6 +1333,7 @@ proc registerThumbnail(target: HWND) =
     if not appState.hasCrop:
       applySavedCrop(target)
     updateThumbnailProperties()
+    applyAspectLock()
     startValidationTimer()
     logEvent(
       "thumbnail_registration",
@@ -1275,6 +1379,7 @@ proc refreshCropForSourceResize(newClient: RECT) =
     saveCropToConfig(appState.cropRect, true)
 
   updateThumbnailProperties()
+  applyAspectLock()
   updateCropDialogFields()
 
 var cropDialogClassRegistered = false
@@ -1621,6 +1726,9 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
       rememberRestorableStyle(hwnd)
     appState.cfg.borderless = not appState.cfg.borderless
     applyWindowStyles(hwnd)
+  of idToggleAspectLock:
+    appState.cfg.lockAspect = not appState.cfg.lockAspect
+    applyAspectLock()
   of idEditCrop:
     setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
@@ -1677,6 +1785,13 @@ proc stopValidationTimer() =
 
 proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
   case msg
+  of WM_SIZING:
+    if appState.cfg.lockAspect and lParam != 0:
+      let rectPtr = cast[ptr RECT](lParam)
+      if rectPtr != nil:
+        adjustSizingRectForAspect(rectPtr[], UINT(wParam))
+        return TRUE
+    discard
   of WM_SIZE:
     handleSize(lParam)
     updateThumbnailProperties()
