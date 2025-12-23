@@ -18,6 +18,7 @@ proc registerThumbnail(target: HWND)
 proc startValidationTimer()
 proc stopValidationTimer()
 proc createSelectionOverlayWindow(): HWND
+proc showSelectionOverlay()
 proc updateSelectionOverlayBounds()
 proc selectionOverlayWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
 proc setCrop*(rect: RECT)
