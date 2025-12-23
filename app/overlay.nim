@@ -335,6 +335,7 @@ proc beginDragSelection(hwnd: HWND; lParam: LPARAM): bool =
   appState.dragCurrent = start
   appState.lastDragBlockReason = ""
   updateStatusText()
+  showSelectionOverlay()
   discard SetCapture(hwnd)
   refreshDragPreview()
   logEvent(
@@ -864,6 +865,8 @@ proc updateSelectionOverlayBounds() =
     height,
     SWP_NOACTIVATE
   )
+  if appState.mouseCropEnabled:
+    discard ShowWindow(appState.selectionOverlay, SW_SHOWNOACTIVATE)
 
 proc overlayDestinationRect(): IntRect =
   let client = clientRect(appState.hwnd).toIntRect
