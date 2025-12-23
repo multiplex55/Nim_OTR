@@ -889,17 +889,23 @@ proc updateThumbnailProperties() =
   props.fSourceClientAreaOnly = 1
   discard DwmUpdateThumbnailProperties(appState.thumbnail, addr props)
 
-proc applyAspectLock() =
-  if not appState.cfg.lockAspect or appState.hwnd == 0:
-    return
-
+proc currentTargetAspect(): Option[float] =
   let sourceRect = currentCropRect()
   let sourceWidth = rectWidth(sourceRect)
   let sourceHeight = rectHeight(sourceRect)
   if sourceWidth <= 0 or sourceHeight <= 0:
     return
+  some(sourceWidth.float / sourceHeight.float)
 
-  let targetAspect = sourceWidth.float / sourceHeight.float
+proc applyAspectLock() =
+  if not appState.cfg.lockAspect or appState.hwnd == 0:
+    return
+
+  let targetAspectOpt = currentTargetAspect()
+  if targetAspectOpt.isNone:
+    return
+
+  let targetAspect = targetAspectOpt.get()
   let client = clientRect(appState.hwnd)
   let clientWidth = rectWidth(client)
   let clientHeight = rectHeight(client)
@@ -926,6 +932,58 @@ proc applyAspectLock() =
 
   setClientSize(appState.hwnd, newWidth, newHeight)
   updateThumbnailProperties()
+
+proc adjustSizingRectForAspect(rect: var RECT; edge: UINT) =
+  let targetAspectOpt = currentTargetAspect()
+  if targetAspectOpt.isNone:
+    return
+
+  let targetAspect = targetAspectOpt.get()
+  let width = rectWidth(rect)
+  let height = rectHeight(rect)
+  if width <= 0 or height <= 0:
+    return
+
+  let widthFromHeight = int(round(height.float * targetAspect))
+  let heightFromWidth = int(round(width.float / targetAspect))
+
+  var newWidth = width
+  var newHeight = height
+  let widthDelta = abs(widthFromHeight - width)
+  let heightDelta = abs(heightFromWidth - height)
+
+  if widthDelta <= heightDelta:
+    newWidth = widthFromHeight
+  else:
+    newHeight = heightFromWidth
+
+  case edge
+  of WMSZ_LEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_RIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_TOP:
+    rect.top = rect.bottom - LONG(newHeight)
+    rect.right = rect.left + LONG(newWidth)
+  of WMSZ_BOTTOM:
+    rect.bottom = rect.top + LONG(newHeight)
+    rect.right = rect.left + LONG(newWidth)
+  of WMSZ_TOPLEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.top = rect.bottom - LONG(newHeight)
+  of WMSZ_TOPRIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.top = rect.bottom - LONG(newHeight)
+  of WMSZ_BOTTOMLEFT:
+    rect.left = rect.right - LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  of WMSZ_BOTTOMRIGHT:
+    rect.right = rect.left + LONG(newWidth)
+    rect.bottom = rect.top + LONG(newHeight)
+  else:
+    discard
 
 proc mouseOverOverlay(lParam: LPARAM): bool =
   ## WM_MOUSEWHEEL provides screen coordinates in lParam; ensure the topmost
@@ -1727,6 +1785,13 @@ proc stopValidationTimer() =
 
 proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
   case msg
+  of WM_SIZING:
+    if appState.cfg.lockAspect and lParam != 0:
+      let rectPtr = cast[ptr RECT](lParam)
+      if rectPtr != nil:
+        adjustSizingRectForAspect(rectPtr[], UINT(wParam))
+        return TRUE
+    discard
   of WM_SIZE:
     handleSize(lParam)
     updateThumbnailProperties()
