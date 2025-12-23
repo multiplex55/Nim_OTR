@@ -719,6 +719,10 @@ proc hideSelectionOverlay() =
 
 proc setMouseCropEnabled(enabled: bool; source: string = "menu") =
   if appState.mouseCropEnabled == enabled:
+    if enabled:
+      showSelectionOverlay()
+    else:
+      hideSelectionOverlay()
     return
   appState.mouseCropEnabled = enabled
   if enabled and appState.clickThroughEnabled:
