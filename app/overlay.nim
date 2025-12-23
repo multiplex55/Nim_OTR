@@ -38,7 +38,8 @@ const
   idResetCrop = 1005
   idShowDebugInfo = 1006
   idMouseCrop = 1007
-  idExit = 1008
+  idAutoOpenCropDialog = 1008
+  idExit = 1009
   idWindowMenuNone = 1100
   idWindowMenuStart = 1101
 
@@ -83,6 +84,7 @@ let
   menuLabelBorderless = L"Borderless"
   menuLabelAspectLock = L"Lock Aspect to Source"
   menuLabelCrop = L"Crop…"
+  menuLabelAutoOpenCrop = L"Auto-open Crop Dialog"
   menuLabelMouseCrop = L"Mouse Crop"
   menuLabelResetCrop = L"Reset Crop"
   menuLabelDebugInfo = L"Debug Info"
@@ -672,6 +674,7 @@ proc createContextMenu() =
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
+  discard AppendMenuW(menu, menuTopFlags, idAutoOpenCropDialog, menuLabelAutoOpenCrop)
   discard AppendMenuW(menu, menuTopFlags, idMouseCrop, menuLabelMouseCrop)
   discard AppendMenuW(menu, menuTopFlags, idResetCrop, menuLabelResetCrop)
 
@@ -692,6 +695,9 @@ proc updateContextMenuChecks() =
 
   let aspectFlags: UINT = UINT(if appState.cfg.lockAspect: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idToggleAspectLock, aspectFlags)
+
+  let autoOpenFlags: UINT = UINT(if appState.cfg.autoOpenCropDialog: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
+  discard CheckMenuItem(appState.contextMenu, idAutoOpenCropDialog, autoOpenFlags)
 
   let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
@@ -1732,9 +1738,20 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idEditCrop:
     setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
+  of idAutoOpenCropDialog:
+    appState.cfg.autoOpenCropDialog = not appState.cfg.autoOpenCropDialog
+    saveOverlayConfig(appState.cfg)
+    updateContextMenuChecks()
+    logEvent(
+      "mouse_crop",
+      [
+        ("action", %*"auto_open_toggle"),
+        ("enabled", %*appState.cfg.autoOpenCropDialog)
+      ]
+    )
   of idMouseCrop:
     setMouseCropEnabled(not appState.mouseCropEnabled)
-    if appState.mouseCropEnabled:
+    if appState.mouseCropEnabled and appState.cfg.autoOpenCropDialog:
       showCropDialog()
   of idResetCrop:
     resetCropFromDialog()
