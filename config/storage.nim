@@ -1,6 +1,6 @@
 ## Persisted configuration for overlay window position, target, and crop state.
 
-import std/[json, os]
+import std/[json, os, strutils]
 
 const
   persistOverlayConfig = false
@@ -10,6 +10,10 @@ const
   invalidCoord = -1
 
 type
+  WindowMenuSortMode* = enum
+    windowMenuSortTitleAsc,
+    windowMenuSortDesktopAsc
+
   ## User-configurable overlay layout and crop settings persisted on disk.
   OverlayConfig* = object
     x*: int
@@ -31,6 +35,7 @@ type
     targetProcessPath*: string
     includeCloaked*: bool
     debugLogging*: bool
+    windowMenuSortMode*: WindowMenuSortMode
 
 proc readIntField(data: JsonNode; key: string; dest: var int) =
   let node = data.getOrDefault(key)
@@ -46,6 +51,23 @@ proc readStringField(data: JsonNode; key: string; dest: var string) =
   let node = data.getOrDefault(key)
   if node.kind != JNull:
     dest = node.getStr()
+
+proc readSortModeField(data: JsonNode; key: string; dest: var WindowMenuSortMode) =
+  let node = data.getOrDefault(key)
+  if node.kind != JNull:
+    let mode = node.getStr().toLowerAscii
+    case mode
+    of "desktop", "virtual_desktop", "virtualdesktop":
+      dest = windowMenuSortDesktopAsc
+    else:
+      dest = windowMenuSortTitleAsc
+
+proc sortModeString(mode: WindowMenuSortMode): string =
+  case mode
+  of windowMenuSortDesktopAsc:
+    "desktop"
+  of windowMenuSortTitleAsc:
+    "title"
 
 ## Provides default dimensions and state for a fresh overlay configuration.
 proc defaultOverlayConfig*(): OverlayConfig =
@@ -68,7 +90,8 @@ proc defaultOverlayConfig*(): OverlayConfig =
     targetProcess: "",
     targetProcessPath: "",
     includeCloaked: false,
-    debugLogging: false
+    debugLogging: false,
+    windowMenuSortMode: windowMenuSortTitleAsc
   )
 
 ## Path to the overlay configuration file, creating the config directory if needed.
@@ -107,6 +130,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       readStringField(data, "targetProcessPath", result.targetProcessPath)
       readBoolField(data, "includeCloaked", result.includeCloaked)
       readBoolField(data, "debugLogging", result.debugLogging)
+      readSortModeField(data, "windowMenuSortMode", result.windowMenuSortMode)
       if result.cropActive and (result.cropWidth <= 0 or result.cropHeight <= 0):
         ## Prevent restoring a zero-area active crop on launch.
         result.cropActive = false
@@ -141,7 +165,8 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "targetProcess": cfg.targetProcess,
     "targetProcessPath": cfg.targetProcessPath,
     "includeCloaked": cfg.includeCloaked,
-    "debugLogging": cfg.debugLogging
+    "debugLogging": cfg.debugLogging,
+    "windowMenuSortMode": sortModeString(cfg.windowMenuSortMode)
   }
   writeFile(configPath(), node.pretty())
 
