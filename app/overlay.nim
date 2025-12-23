@@ -1,5 +1,5 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[json, options, strutils, math, tables]
+import std/[algorithm, json, options, strutils, math, tables]
 import winim/lean
 import ../config/storage
 import ../util/[geometry, virtualdesktop, winutils]
@@ -24,6 +24,7 @@ proc setCrop*(rect: RECT)
 proc setCropFromOverlayRect*(rect: RECT)
 proc resetCrop*()
 proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
+proc sortDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.}
 proc restoreAndFocusTarget()
 
 const
@@ -39,6 +40,7 @@ const
   idShowDebugInfo = 1006
   idMouseCrop = 1007
   idExit = 1008
+  idWindowSortOptions = 1009
   idWindowMenuNone = 1100
   idWindowMenuStart = 1101
 
@@ -48,6 +50,8 @@ const
   idCropHeight = 2004
   idCropApply = 2005
   idCropResetButton = 2006
+  idSortTitleOption = 2101
+  idSortDesktopOption = 2102
 
   menuTopFlags = MF_STRING
   menuChecked = MF_CHECKED
@@ -79,6 +83,7 @@ let
   menuLabelSelectWindow = L"Select Window… (Ctrl+Shift+P)"
   menuLabelWindowList = L"Target Window"
   menuLabelWindowNone = L"None"
+  menuLabelWindowSort = L"Window Sort…"
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelAspectLock = L"Lock Aspect to Source"
@@ -91,6 +96,9 @@ let
   cropDialogClass = L"NimOTRCropDialog"
   cropDialogWidth = 320
   cropDialogHeight = 240
+  sortDialogClass = L"NimOTRSortDialog"
+  sortDialogWidth = 260
+  sortDialogHeight = 170
 
 type
   CropDialogState = object
@@ -101,6 +109,11 @@ type
     editHeight: HWND
     applyButton: HWND
     resetButton: HWND
+
+  SortDialogState = object
+    hwnd: HWND
+    radioTitle: HWND
+    radioDesktop: HWND
 
   WindowIdentity = object
     hwnd: HWND
@@ -124,6 +137,7 @@ type
     validationTimerRunning: bool
     contextMenu: HMENU
     cropDialog: CropDialogState
+    sortDialog: SortDialogState
     clickThroughEnabled: bool
     selectingTarget: bool
     statusText: string
@@ -536,11 +550,14 @@ proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
     processPath: procInfo.path
   )
 
-proc friendlyDesktopLabel(desktopId: string): string =
+proc desktopOrdinal(desktopId: string): int =
   if not desktopOrdinals.hasKey(desktopId):
     desktopOrdinals[desktopId] = nextDesktopOrdinal
     inc nextDesktopOrdinal
-  "Desktop " & $desktopOrdinals[desktopId]
+  desktopOrdinals[desktopId]
+
+proc friendlyDesktopLabel(desktopId: string): string =
+  "Desktop " & $desktopOrdinal(desktopId)
 
 proc windowDesktopLabel(hwnd: HWND): string =
   var desktopManager = initVirtualDesktopManager()
@@ -571,6 +588,31 @@ proc resolveDesktopLabel(win: core.WindowInfo): string =
     friendlyDesktopLabel(win.desktopId.get())
   else:
     windowDesktopLabel(win.hwnd)
+
+proc windowDesktopSortOrdinal(win: core.WindowInfo): tuple[hasDesktop: bool, ordinal: int] =
+  if win.desktopId.isSome:
+    return (hasDesktop: true, ordinal: desktopOrdinal(win.desktopId.get()))
+  (hasDesktop: false, ordinal: high(int))
+
+proc compareWindowMenuItems(
+    a, b: tuple[idx: int, win: core.WindowInfo]; mode: WindowMenuSortMode): int =
+  case mode
+  of windowMenuSortDesktopAsc:
+    let aOrd = windowDesktopSortOrdinal(a.win)
+    let bOrd = windowDesktopSortOrdinal(b.win)
+    if aOrd.hasDesktop != bOrd.hasDesktop:
+      return if aOrd.hasDesktop: -1 else: 1
+    result = cmp(aOrd.ordinal, bOrd.ordinal)
+    if result != 0:
+      return result
+    result = cmpIgnoreCase(a.win.title, b.win.title)
+  of windowMenuSortTitleAsc:
+    result = cmpIgnoreCase(a.win.title, b.win.title)
+    if result != 0:
+      return result
+    result = cmpIgnoreCase(a.win.processName, b.win.processName)
+  if result == 0:
+    result = cmp(a.idx, b.idx)
 
 proc processMatches(cfg: OverlayConfig; winProcess: string; winPath: string): bool =
   if cfg.targetProcessPath.len > 0:
@@ -664,8 +706,16 @@ proc populateWindowSelectionMenu() =
   discard AppendMenuW(appState.windowSelectionMenu, menuTopFlags, idWindowMenuNone, menuLabelWindowNone)
 
   let windows = enumTopLevelWindows(currentEligibilityOptions())
+  var indexed: seq[tuple[idx: int, win: core.WindowInfo]] = @[]
+  for i, win in windows:
+    indexed.add((idx: i, win: win))
+
+  indexed.sort(proc(a, b: tuple[idx: int, win: core.WindowInfo]): int =
+    compareWindowMenuItems(a, b, appState.cfg.windowMenuSortMode))
+
   var nextId: UINT = idWindowMenuStart
-  for win in windows:
+  for item in indexed:
+    let win = item.win
     let title = if win.title.len > 0: win.title else: "(No Title)"
     let desktopLabel = resolveDesktopLabel(win)
     let label = title & " — " & win.processName & " — " & desktopLabel
@@ -685,6 +735,7 @@ proc createContextMenu() =
   appState.contextMenu = menu
   populateWindowSelectionMenu()
   discard AppendMenuW(menu, menuTopFlags, idSelectWindow, menuLabelSelectWindow)
+  discard AppendMenuW(menu, menuTopFlags, idWindowSortOptions, menuLabelWindowSort)
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
   discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
@@ -1402,7 +1453,9 @@ proc refreshCropForSourceResize(newClient: RECT) =
   applyAspectLock()
   updateCropDialogFields()
 
-var cropDialogClassRegistered = false
+var
+  cropDialogClassRegistered = false
+  sortDialogClassRegistered = false
 
 proc registerCropDialogClass(): bool =
   if cropDialogClassRegistered:
@@ -1419,6 +1472,22 @@ proc registerCropDialogClass(): bool =
 
   cropDialogClassRegistered = RegisterClassExW(wc) != 0
   cropDialogClassRegistered
+
+proc registerSortDialogClass(): bool =
+  if sortDialogClassRegistered:
+    return true
+
+  var wc: WNDCLASSEXW
+  wc.cbSize = sizeof(WNDCLASSEXW).UINT
+  wc.style = CS_HREDRAW or CS_VREDRAW
+  wc.lpfnWndProc = sortDialogWndProc
+  wc.hInstance = appState.hInstance
+  wc.hCursor = LoadCursorW(0, IDC_ARROW)
+  wc.hbrBackground = cast[HBRUSH](COLOR_WINDOW + 1)
+  wc.lpszClassName = sortDialogClass
+
+  sortDialogClassRegistered = RegisterClassExW(wc) != 0
+  sortDialogClassRegistered
 
 proc setControlFont(handle: HWND) =
   if handle != 0:
@@ -1633,6 +1702,193 @@ proc showCropDialog() =
     discard UpdateWindow(hwnd)
     discard SetForegroundWindow(hwnd)
 
+proc updateSortDialogSelection() =
+  if appState.sortDialog.radioTitle != 0:
+    let checked = appState.cfg.windowMenuSortMode == windowMenuSortTitleAsc
+    discard SendMessageW(
+      appState.sortDialog.radioTitle,
+      BM_SETCHECK,
+      WPARAM(if checked: BST_CHECKED else: BST_UNCHECKED),
+      0
+    )
+  if appState.sortDialog.radioDesktop != 0:
+    let checked = appState.cfg.windowMenuSortMode == windowMenuSortDesktopAsc
+    discard SendMessageW(
+      appState.sortDialog.radioDesktop,
+      BM_SETCHECK,
+      WPARAM(if checked: BST_CHECKED else: BST_UNCHECKED),
+      0
+    )
+
+proc selectedSortModeFromDialog(): WindowMenuSortMode =
+  let desktopChecked =
+    SendMessageW(appState.sortDialog.radioDesktop, BM_GETCHECK, 0, 0) == BST_CHECKED
+  if desktopChecked:
+    windowMenuSortDesktopAsc
+  else:
+    windowMenuSortTitleAsc
+
+proc initSortDialogControls(hwnd: HWND) =
+  appState.sortDialog.hwnd = hwnd
+
+  let padding: int32 = 16
+  let labelHeight: int32 = 20
+
+  let label = CreateWindowExW(
+    0,
+    L"STATIC",
+    L"Sort windows by:",
+    WS_CHILD or WS_VISIBLE,
+    padding,
+    padding,
+    200,
+    labelHeight,
+    hwnd,
+    0,
+    appState.hInstance,
+    nil
+  )
+  setControlFont(label)
+
+  let radioY = padding + labelHeight + 8
+  let radioWidth: int32 = 200
+
+  let titleRadio = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"Title (A→Z)",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP or BS_AUTORADIOBUTTON or WS_GROUP,
+    padding,
+    radioY,
+    radioWidth,
+    22,
+    hwnd,
+    cast[HMENU](idSortTitleOption),
+    appState.hInstance,
+    nil
+  )
+  appState.sortDialog.radioTitle = titleRadio
+  setControlFont(titleRadio)
+
+  let desktopRadio = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"Virtual desktop (ascending)",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP or BS_AUTORADIOBUTTON,
+    padding,
+    radioY + 26,
+    radioWidth + 30,
+    22,
+    hwnd,
+    cast[HMENU](idSortDesktopOption),
+    appState.hInstance,
+    nil
+  )
+  appState.sortDialog.radioDesktop = desktopRadio
+  setControlFont(desktopRadio)
+
+  updateSortDialogSelection()
+
+  let buttonY = radioY + 60
+  let buttonWidth: int32 = 80
+
+  let okBtn = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"OK",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP,
+    padding,
+    buttonY,
+    buttonWidth,
+    26,
+    hwnd,
+    cast[HMENU](IDOK),
+    appState.hInstance,
+    nil
+  )
+  setControlFont(okBtn)
+  discard SendMessageW(okBtn, BM_SETSTYLE, WPARAM(BS_DEFPUSHBUTTON), LPARAM(TRUE))
+
+  let cancelBtn = CreateWindowExW(
+    0,
+    L"BUTTON",
+    L"Cancel",
+    WS_CHILD or WS_VISIBLE or WS_TABSTOP,
+    padding + buttonWidth + 12,
+    buttonY,
+    buttonWidth,
+    26,
+    hwnd,
+    cast[HMENU](IDCANCEL),
+    appState.hInstance,
+    nil
+  )
+  setControlFont(cancelBtn)
+  discard SendMessageW(cancelBtn, BM_SETSTYLE, WPARAM(BS_PUSHBUTTON), LPARAM(TRUE))
+
+proc applySortSelectionFromDialog() =
+  let selectedMode = selectedSortModeFromDialog()
+  if appState.cfg.windowMenuSortMode != selectedMode:
+    appState.cfg.windowMenuSortMode = selectedMode
+    populateWindowSelectionMenu()
+
+proc sortDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.stdcall.} =
+  case msg
+  of WM_CREATE:
+    initSortDialogControls(hwnd)
+    return 0
+  of WM_COMMAND:
+    case loWord(wParam)
+    of IDOK:
+      applySortSelectionFromDialog()
+      discard DestroyWindow(hwnd)
+      return 0
+    of IDCANCEL:
+      discard DestroyWindow(hwnd)
+      return 0
+    else:
+      discard
+    return 0
+  of WM_CLOSE:
+    discard DestroyWindow(hwnd)
+    return 0
+  of WM_DESTROY:
+    if appState.sortDialog.hwnd == hwnd:
+      appState.sortDialog = SortDialogState()
+    return 0
+  else:
+    discard
+  result = DefWindowProcW(hwnd, msg, wParam, lParam)
+
+proc showSortDialog() =
+  if not registerSortDialogClass():
+    return
+
+  if appState.sortDialog.hwnd != 0:
+    discard SetForegroundWindow(appState.sortDialog.hwnd)
+    updateSortDialogSelection()
+    return
+
+  let hwnd = CreateWindowExW(
+    WS_EX_TOOLWINDOW or WS_EX_CONTROLPARENT,
+    sortDialogClass,
+    L"Window Sort",
+    WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU,
+    CW_USEDEFAULT,
+    CW_USEDEFAULT,
+    int32(sortDialogWidth),
+    int32(sortDialogHeight),
+    appState.hwnd,
+    0,
+    appState.hInstance,
+    nil
+  )
+
+  if hwnd != 0:
+    discard ShowWindow(hwnd, SW_SHOWNORMAL)
+    discard UpdateWindow(hwnd)
+    discard SetForegroundWindow(hwnd)
+
 ## Sets the target window whose client area will be mirrored by the overlay.
 proc setTargetWindow*(target: HWND) =
   if target != appState.targetHwnd:
@@ -1763,6 +2019,8 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idEditCrop:
     setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
+  of idWindowSortOptions:
+    showSortDialog()
   of idMouseCrop:
     setMouseCropEnabled(not appState.mouseCropEnabled)
     if appState.mouseCropEnabled:
@@ -1967,6 +2225,8 @@ proc runOverlayLoop*() =
   var msg: MSG
   while GetMessageW(addr msg, 0, 0, 0) != 0:
     if appState.cropDialog.hwnd != 0 and IsDialogMessageW(appState.cropDialog.hwnd, addr msg) != 0:
+      continue
+    if appState.sortDialog.hwnd != 0 and IsDialogMessageW(appState.sortDialog.hwnd, addr msg) != 0:
       continue
     discard TranslateMessage(addr msg)
     discard DispatchMessageW(addr msg)
