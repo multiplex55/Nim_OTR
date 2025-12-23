@@ -1,5 +1,5 @@
 ## Overlay window entry point that manages DWM thumbnails and crop state.
-import std/[json, options, strutils, math]
+import std/[json, options, strutils, math, tables]
 import winim/lean
 import ../config/storage
 import ../util/[geometry, virtualdesktop, winutils]
@@ -148,6 +148,10 @@ var appState: AppState = AppState(
   baseStyle: DWORD(styleStandard),
   windowMenuItems: @[]
 )
+
+var
+  desktopOrdinals = initTable[string, int]()
+  nextDesktopOrdinal = 1
 
 proc eligibilityOptions*(cfg: OverlayConfig): WindowEligibilityOptions =
   WindowEligibilityOptions(includeCloaked: cfg.includeCloaked)
@@ -532,6 +536,12 @@ proc collectWindowIdentity(hwnd: HWND): WindowIdentity =
     processPath: procInfo.path
   )
 
+proc friendlyDesktopLabel(desktopId: string): string =
+  if not desktopOrdinals.hasKey(desktopId):
+    desktopOrdinals[desktopId] = nextDesktopOrdinal
+    inc nextDesktopOrdinal
+  "Desktop " & $desktopOrdinals[desktopId]
+
 proc windowDesktopLabel(hwnd: HWND): string =
   var desktopManager = initVirtualDesktopManager()
   var desktopManagerPtr: ptr VirtualDesktopManager = nil
@@ -541,12 +551,26 @@ proc windowDesktopLabel(hwnd: HWND): string =
   let id = windowDesktopId(desktopManagerPtr, hwnd)
   let label =
     if id.isSome:
-      formatDesktopId(id.get())
+      friendlyDesktopLabel(formatDesktopId(id.get()))
     else:
-      "unknown"
+      block:
+        let onCurrent = isOnCurrentDesktop(desktopManagerPtr, hwnd)
+        if onCurrent.isSome:
+          if onCurrent.get():
+            "Desktop 1"
+          else:
+            "Off-screen"
+        else:
+          "Unknown desktop"
 
   shutdown(desktopManager)
   label
+
+proc resolveDesktopLabel(win: core.WindowInfo): string =
+  if win.desktopId.isSome:
+    friendlyDesktopLabel(win.desktopId.get())
+  else:
+    windowDesktopLabel(win.hwnd)
 
 proc processMatches(cfg: OverlayConfig; winProcess: string; winPath: string): bool =
   if cfg.targetProcessPath.len > 0:
@@ -643,12 +667,8 @@ proc populateWindowSelectionMenu() =
   var nextId: UINT = idWindowMenuStart
   for win in windows:
     let title = if win.title.len > 0: win.title else: "(No Title)"
-    let desktopLabel =
-      if win.desktopId.isSome:
-        win.desktopId.get()
-      else:
-        windowDesktopLabel(win.hwnd)
-    let label = title & " — " & win.processName & " [" & desktopLabel & "]"
+    let desktopLabel = resolveDesktopLabel(win)
+    let label = title & " — " & win.processName & " — " & desktopLabel
 
     if AppendMenuW(appState.windowSelectionMenu, menuTopFlags, nextId, label.newWideCString) != 0:
       appState.windowMenuItems.add(win.hwnd)
