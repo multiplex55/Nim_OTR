@@ -1083,7 +1083,7 @@ proc computeStatusText(): string =
     return "Source is minimized or hidden. Restore it or " & selectAction
 
   var status = ""
-  if appState.mouseCropEnabled or cropDialogVisible():
+  if appState.mouseCropEnabled:
     let dragState = if appState.dragSelecting: "Dragging selection…" else: "Mouse crop enabled. Drag to select a region."
     let clickState = if appState.clickThroughEnabled: "Click-through temporarily ignored while cropping." else: "Click-through off."
     status = dragState & " " & clickState & " ESC cancels."
@@ -1120,6 +1120,7 @@ proc showDebugInfo() =
   lines.add("Crop: " & rectDescription(crop))
   lines.add("Opacity: " & $int(appState.opacity))
   lines.add("Mouse Crop Enabled: " & boolLabel(appState.mouseCropEnabled))
+  lines.add("Auto-open Crop Dialog: " & boolLabel(appState.cfg.autoOpenCropDialog))
   lines.add("Drag Selecting: " & boolLabel(appState.dragSelecting))
   lines.add("Click-through Enabled: " & boolLabel(appState.clickThroughEnabled))
   lines.add("Drag Block Reason: " & (if appState.lastDragBlockReason.len > 0: appState.lastDragBlockReason else: "None"))
@@ -1745,7 +1746,6 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
     appState.cfg.lockAspect = not appState.cfg.lockAspect
     applyAspectLock()
   of idEditCrop:
-    setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
   of idAutoOpenCropDialog:
     appState.cfg.autoOpenCropDialog = not appState.cfg.autoOpenCropDialog
