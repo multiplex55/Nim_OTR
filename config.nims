@@ -4,6 +4,8 @@
 # Platform and application type
 switch("os", "windows")
 switch("app", "gui")
+# Always link as a GUI subsystem binary so the EXE never spawns a console window.
+# switch("subsystem", "windows")
 
 # Prefer ORC; allow ARC if explicitly requested.
 if defined(arc):

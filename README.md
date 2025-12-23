@@ -12,7 +12,7 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 - **Overlay**: handles window creation and input via `RegisterClassExW`, `CreateWindowExW`, and `WndProc` handlers, while mirroring content with `DwmRegisterThumbnail`, `DwmUpdateThumbnailProperties`, and related DWM APIs.
 
 ## Building and Debugging
-- Build the overlay executable: `nimble build app/overlay`
+- Build the overlay executable without a console window: `nimble releaseOverlay`
 - Run with debug symbols and stack traces: `nim c -d:debug --stackTrace:on app/overlay.nim`
 - Execute picker standalone for manual testing: `nim c -r picker/cli.nim`
 - Run geometry/unit tests: `nim c -r tests/geometry_test.nim`
@@ -27,7 +27,7 @@ Lightweight Windows overlay that mirrors a selected application's client area us
 ## Manual Validation
 1. Create a second Windows virtual desktop and place an application window on each desktop.
 2. Run `nim c -r picker/cli.nim` and confirm both windows are listed with their `Desktop=<GUID>` labels.
-3. Start the overlay (`nimble build app/overlay`), press `Ctrl+Shift+P`, and pick the window that lives on the non-current desktop; the selection log should include its virtual desktop GUID.
+3. Start the overlay (`nimble releaseOverlay`), press `Ctrl+Shift+P`, and pick the window that lives on the non-current desktop; the selection log should include its virtual desktop GUID.
 
 ## Formatting
 Format Nim sources before committing:
