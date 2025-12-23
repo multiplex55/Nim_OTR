@@ -1561,6 +1561,10 @@ proc cropDialogWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): L
     if int32(wParam) == VK_RETURN:
       applyCropFromDialog()
       return 0
+    elif int32(wParam) == VK_ESCAPE:
+      ## Allow closing the crop dialog with Escape to run standard cleanup.
+      discard DestroyWindow(hwnd)
+      return 0
   of WM_CLOSE:
     discard DestroyWindow(hwnd)
     return 0
