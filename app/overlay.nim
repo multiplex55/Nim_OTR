@@ -360,6 +360,7 @@ proc updateDragSelection(lParam: LPARAM): bool =
     return true
 
   let nextPoint = clampPointToRect(toPoint(int16(loWordL(lParam)), int16(hiWordL(lParam))), bounds.get())
+  showSelectionOverlay()
   if nextPoint.x != appState.dragCurrent.x or nextPoint.y != appState.dragCurrent.y:
     appState.dragCurrent = nextPoint
     refreshDragPreview()
@@ -866,7 +867,7 @@ proc updateSelectionOverlayBounds() =
     height,
     SWP_NOACTIVATE
   )
-  if appState.mouseCropEnabled:
+  if appState.mouseCropEnabled or appState.dragSelecting:
     discard ShowWindow(appState.selectionOverlay, SW_SHOWNOACTIVATE)
 
 proc overlayDestinationRect(): IntRect =
