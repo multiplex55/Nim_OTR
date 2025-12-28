@@ -662,6 +662,25 @@ proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
 
   some(stored)
 
+proc waitForTargetDesktopActivation(target: HWND; maxAttempts: int = 10; delayMs: int = 50): bool =
+  if target == 0:
+    return false
+
+  var manager = initVirtualDesktopManager()
+  if not manager.valid():
+    return true
+  defer:
+    shutdown(manager)
+
+  for attempt in 0..maxAttempts:
+    let onCurrent = isOnCurrentDesktop(addr manager, target)
+    if onCurrent.isNone or onCurrent.get():
+      return true
+    if attempt < maxAttempts:
+      Sleep(DWORD(delayMs))
+
+  false
+
 proc moveMouseToTargetTitleBarCenter(target: HWND) =
   if target == 0 or IsIconic(target) != 0:
     return
@@ -690,7 +709,8 @@ proc restoreAndFocusTarget() =
   if IsIconic(target) != 0:
     discard ShowWindow(target, SW_RESTORE)
   discard SetForegroundWindow(target)
-  if appState.moveMouseOnFocus and not appState.mouseCropEnabled and not appState.dragSelecting:
+  let desktopReady = waitForTargetDesktopActivation(target)
+  if appState.moveMouseOnFocus and not appState.mouseCropEnabled and not appState.dragSelecting and desktopReady:
     moveMouseToTargetTitleBarCenter(target)
   if appState.thumbnailSuppressed:
     appState.thumbnailSuppressed = false
