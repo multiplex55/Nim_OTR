@@ -204,27 +204,6 @@ proc hiWordL(value: LPARAM): UINT {.inline.} = UINT((value shr 16) and 0xFFFF)
 proc shiftHeld(): bool =
   (GetAsyncKeyState(VK_SHIFT) and 0x8000'i16) != 0
 
-proc moveMouseToTargetTitleBarCenter(target: HWND) =
-  if target == 0 or IsIconic(target) != 0:
-    return
-
-  var bounds: RECT
-  if DwmGetWindowAttribute(target, DWMWA_EXTENDED_FRAME_BOUNDS, addr bounds, DWORD(sizeof(bounds))) != 0:
-    if GetWindowRect(target, addr bounds) == 0:
-      return
-
-  let width = rectWidth(bounds)
-  let height = rectHeight(bounds)
-  if width <= 0 or height <= 0:
-    return
-
-  let captionHeight = max(0, GetSystemMetrics(SM_CYCAPTION))
-  let frameHeight = max(0, GetSystemMetrics(SM_CYFRAME))
-
-  let centerX = bounds.left + (width div 2)
-  let titleBarY = bounds.top + frameHeight + (captionHeight div 2)
-  discard SetCursorPos(int32(centerX), int32(titleBarY))
-
 proc rectEquals(a, b: RECT): bool =
   a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom
 
@@ -682,6 +661,27 @@ proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
     return
 
   some(stored)
+
+proc moveMouseToTargetTitleBarCenter(target: HWND) =
+  if target == 0 or IsIconic(target) != 0:
+    return
+
+  var bounds: RECT
+  if DwmGetWindowAttribute(target, DWMWA_EXTENDED_FRAME_BOUNDS, addr bounds, DWORD(sizeof(bounds))) != 0:
+    if GetWindowRect(target, addr bounds) == 0:
+      return
+
+  let width = rectWidth(bounds)
+  let height = rectHeight(bounds)
+  if width <= 0 or height <= 0:
+    return
+
+  let captionHeight = max(0, GetSystemMetrics(SM_CYCAPTION))
+  let frameHeight = max(0, GetSystemMetrics(SM_CYFRAME))
+
+  let centerX = bounds.left + (width div 2)
+  let titleBarY = bounds.top + frameHeight + (captionHeight div 2)
+  discard SetCursorPos(int32(centerX), int32(titleBarY))
 
 proc restoreAndFocusTarget() =
   let target = appState.targetHwnd
