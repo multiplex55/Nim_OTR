@@ -10,11 +10,8 @@ requires "nim >= 1.6"
 # Tasks
 bin             = @["app/main"]
 
-task releaseOverlay, "Build GUI-only release binary without a console window" do:
-  let cmd = "nim c -d:release --app:gui --subsystem:windows app/main.nim"
-
-  if exec(cmd) != 0:
-    quit(1)
+task releaseOverlay, "Build GUI-only release binary without a console window":
+  exec "nim c -d:release --app:gui app/main.nim"
 
 # Settings
 # Use nimpretty for formatting; keep exported procs/types documented.
