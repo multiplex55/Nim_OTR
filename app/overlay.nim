@@ -35,12 +35,13 @@ const
   idToggleTopMost = 1001
   idToggleBorderless = 1002
   idToggleAspectLock = 1003
-  idEditCrop = 1004
-  idResetCrop = 1005
-  idShowDebugInfo = 1006
-  idMouseCrop = 1007
-  idExit = 1008
-  idWindowSortOptions = 1009
+  idMoveMouseOnFocus = 1004
+  idEditCrop = 1005
+  idResetCrop = 1006
+  idShowDebugInfo = 1007
+  idMouseCrop = 1008
+  idExit = 1009
+  idWindowSortOptions = 1010
   idWindowMenuNone = 1100
   idWindowMenuStart = 1101
 
@@ -87,6 +88,7 @@ let
   menuLabelTopMost = L"Always on Top"
   menuLabelBorderless = L"Borderless"
   menuLabelAspectLock = L"Lock Aspect to Source"
+  menuLabelMoveMouseOnFocus = L"Move Mouse to Title Bar on Focus"
   menuLabelCrop = L"Crop…"
   menuLabelMouseCrop = L"Mouse Crop"
   menuLabelResetCrop = L"Reset Crop"
@@ -154,13 +156,15 @@ type
     windowSelectionMenu: HMENU
     windowMenuItems: seq[HWND]
     selectionOverlay: HWND
+    moveMouseOnFocus: bool
 
 var appState: AppState = AppState(
   opacity: 255.BYTE,
   thumbnailVisible: true,
   clickThroughEnabled: false,
   baseStyle: DWORD(styleStandard),
-  windowMenuItems: @[]
+  windowMenuItems: @[],
+  moveMouseOnFocus: false
 )
 
 var
@@ -658,6 +662,46 @@ proc validateStoredHandle*(cfg: OverlayConfig; opts: WindowEligibilityOptions): 
 
   some(stored)
 
+proc waitForTargetDesktopActivation(target: HWND; maxAttempts: int = 10; delayMs: int = 50): bool =
+  if target == 0:
+    return false
+
+  var manager = initVirtualDesktopManager()
+  if not manager.valid():
+    return true
+  defer:
+    shutdown(manager)
+
+  for attempt in 0..maxAttempts:
+    let onCurrent = isOnCurrentDesktop(addr manager, target)
+    if onCurrent.isNone or onCurrent.get():
+      return true
+    if attempt < maxAttempts:
+      Sleep(DWORD(delayMs))
+
+  false
+
+proc moveMouseToTargetTitleBarCenter(target: HWND) =
+  if target == 0 or IsIconic(target) != 0:
+    return
+
+  var bounds: RECT
+  if DwmGetWindowAttribute(target, DWMWA_EXTENDED_FRAME_BOUNDS, addr bounds, DWORD(sizeof(bounds))) != 0:
+    if GetWindowRect(target, addr bounds) == 0:
+      return
+
+  let width = rectWidth(bounds)
+  let height = rectHeight(bounds)
+  if width <= 0 or height <= 0:
+    return
+
+  let captionHeight = max(0, GetSystemMetrics(SM_CYCAPTION))
+  let frameHeight = max(0, GetSystemMetrics(SM_CYFRAME))
+
+  let centerX = bounds.left + (width div 2)
+  let titleBarY = bounds.top + frameHeight + (captionHeight div 2)
+  discard SetCursorPos(int32(centerX), int32(titleBarY))
+
 proc restoreAndFocusTarget() =
   let target = appState.targetHwnd
   if target == 0:
@@ -665,6 +709,9 @@ proc restoreAndFocusTarget() =
   if IsIconic(target) != 0:
     discard ShowWindow(target, SW_RESTORE)
   discard SetForegroundWindow(target)
+  let desktopReady = waitForTargetDesktopActivation(target)
+  if appState.moveMouseOnFocus and not appState.mouseCropEnabled and not appState.dragSelecting and desktopReady:
+    moveMouseToTargetTitleBarCenter(target)
   if appState.thumbnailSuppressed:
     appState.thumbnailSuppressed = false
     updateThumbnailProperties()
@@ -740,6 +787,7 @@ proc createContextMenu() =
   discard AppendMenuW(menu, menuTopFlags, idToggleTopMost, menuLabelTopMost)
   discard AppendMenuW(menu, menuTopFlags, idToggleBorderless, menuLabelBorderless)
   discard AppendMenuW(menu, menuTopFlags, idToggleAspectLock, menuLabelAspectLock)
+  discard AppendMenuW(menu, menuTopFlags, idMoveMouseOnFocus, menuLabelMoveMouseOnFocus)
 
   discard AppendMenuW(menu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(menu, menuTopFlags, idEditCrop, menuLabelCrop)
@@ -766,6 +814,9 @@ proc updateContextMenuChecks() =
 
   let mouseCropFlags: UINT = UINT(if appState.mouseCropEnabled: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
   discard CheckMenuItem(appState.contextMenu, idMouseCrop, mouseCropFlags)
+
+  let moveMouseOnFocusFlags: UINT = UINT(if appState.moveMouseOnFocus: menuByCommand or menuChecked else: menuByCommand or menuUnchecked)
+  discard CheckMenuItem(appState.contextMenu, idMoveMouseOnFocus, moveMouseOnFocusFlags)
 
 proc showSelectionOverlay() =
   if appState.selectionOverlay == 0:
@@ -1997,6 +2048,7 @@ proc selectTarget() =
       ("virtual_desktop", %*windowDesktopLabel(win.hwnd))
     ])
     setTargetWindow(win.hwnd)
+    appState.moveMouseOnFocus = appState.cfg.moveMouseOnFocus
   else:
     logEvent("selection", [("status", %*"cancelled")])
 
@@ -2016,6 +2068,10 @@ proc handleCommand(hwnd: HWND, wParam: WPARAM) =
   of idToggleAspectLock:
     appState.cfg.lockAspect = not appState.cfg.lockAspect
     applyAspectLock()
+  of idMoveMouseOnFocus:
+    appState.moveMouseOnFocus = not appState.moveMouseOnFocus
+    appState.cfg.moveMouseOnFocus = appState.moveMouseOnFocus
+    updateContextMenuChecks()
   of idEditCrop:
     setMouseCropEnabled(true, "crop_dialog_command")
     showCropDialog()
@@ -2197,6 +2253,7 @@ proc initOverlay*(cfg: OverlayConfig): bool =
   initLogger(appState.cfg)
   let storedOpacity = max(min(appState.cfg.opacity, 255), 0)
   appState.opacity = BYTE(storedOpacity)
+  appState.moveMouseOnFocus = appState.cfg.moveMouseOnFocus
   appState.hInstance = GetModuleHandleW(nil)
   appState.hwnd = createWindow(appState.hInstance)
   if appState.hwnd == 0:

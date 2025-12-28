@@ -35,6 +35,7 @@ type
     targetProcessPath*: string
     includeCloaked*: bool
     debugLogging*: bool
+    moveMouseOnFocus*: bool
     windowMenuSortMode*: WindowMenuSortMode
 
 proc readIntField(data: JsonNode; key: string; dest: var int) =
@@ -91,6 +92,7 @@ proc defaultOverlayConfig*(): OverlayConfig =
     targetProcessPath: "",
     includeCloaked: false,
     debugLogging: false,
+    moveMouseOnFocus: false,
     windowMenuSortMode: windowMenuSortTitleAsc
   )
 
@@ -130,6 +132,7 @@ proc loadOverlayConfig*(): OverlayConfig =
       readStringField(data, "targetProcessPath", result.targetProcessPath)
       readBoolField(data, "includeCloaked", result.includeCloaked)
       readBoolField(data, "debugLogging", result.debugLogging)
+      readBoolField(data, "moveMouseOnFocus", result.moveMouseOnFocus)
       readSortModeField(data, "windowMenuSortMode", result.windowMenuSortMode)
       if result.cropActive and (result.cropWidth <= 0 or result.cropHeight <= 0):
         ## Prevent restoring a zero-area active crop on launch.
@@ -166,6 +169,7 @@ proc saveOverlayConfig*(cfg: OverlayConfig) =
     "targetProcessPath": cfg.targetProcessPath,
     "includeCloaked": cfg.includeCloaked,
     "debugLogging": cfg.debugLogging,
+    "moveMouseOnFocus": cfg.moveMouseOnFocus,
     "windowMenuSortMode": sortModeString(cfg.windowMenuSortMode)
   }
   writeFile(configPath(), node.pretty())
